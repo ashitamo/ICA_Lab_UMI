@@ -1,0 +1,11 @@
+int8 JOY = 0
+int8 PATH = 1
+
+int64 idx
+float64 duration
+float64[] positions
+float64[] velocity
+int8 mode
+float64 grip
+---
+bool ok
