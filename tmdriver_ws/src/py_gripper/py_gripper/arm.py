@@ -3,13 +3,20 @@ from tm_msgs.msg import FeedbackState
 from robotiq_85_msgs.msg import GripperCmd
 from py_gripper_interfaces.srv import Trajectory
 
+from py_gripper_interfaces.msg import TrajState
+
+
+from sensor_msgs.msg import Image
+
+from std_msgs.msg import Float64MultiArray
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 import time
 import numpy as np
 import queue
-from std_msgs.msg import Float64MultiArray
+
 from scipy.spatial.transform import Rotation as R
 import math
 
@@ -26,9 +33,9 @@ class Arm(Node):
             self.get_logger().info('service not available, waiting again...')
         while not self.script_cli.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
-        
         while not self.set_io_cli.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
+
         self.gripper_pub = self.create_publisher(GripperCmd, '/gripper/cmd', 10)
 
         self.target_positions = np.array([0.0, -0.4, 0.35, 3.14159, 0.0, 3.14159])
@@ -48,7 +55,14 @@ class Arm(Node):
         while not self.is_arrived():
             rclpy.spin_once(self)
         print('arrived')
+        
+        
+        self.color_queue = queue.Queue(2)
+        self.depth_queue = queue.Queue(2)
 
+        self.color_img_sub = self.create_subscription(Image, '/camera/color/image_raw', self.color_callback, qos_profile_sensor_data)
+        self.depth_img_sub = self.create_subscription(Image, '/camera/depth/image_rect_raw', self.depth_callback, qos_profile_sensor_data)
+        self.traj_state_pub = self.create_publisher(TrajState, '/traj_state', 10)
         self.joy_sub = self.create_subscription(Float64MultiArray, 'joy', self.joy_callback, qos_profile_sensor_data)
         self.gripList = []
         self.noCmdCount = 0
@@ -59,13 +73,22 @@ class Arm(Node):
 
         self.create_service(Trajectory, 'trajectory', self.trajectory_callback)
         print('init done')
-        
+    
+    def color_callback(self,msg):
+        if self.color_queue.full():
+            self.color_queue.get()
+        self.color_queue.put(msg)
+
+    def depth_callback(self,msg):
+        if self.depth_queue.full():
+            self.depth_queue.get()
+        self.depth_queue.put(msg)
+    
     def trajectory_callback(self,req:Trajectory.Request,res:Trajectory.Response):
         self.joy_queue.put(req)
         res.ok = True
         # self.get_logger().info("Get Trajectory Request: %s" % req)
         return res
-
 
     def cmd_putter(self):
         if self.joy_queue.empty():
@@ -90,20 +113,29 @@ class Arm(Node):
             return False
         return True
 
+    def pubTrajState(self,cimg,dimg,idx):
+        msg = TrajState()
+        msg.idx = idx
+        msg.color_image = cimg
+        msg.depth_image = dimg
+        self.traj_state_pub.publish(msg)
+
     def gripperTimer(self):
         if len(self.gripList) == 0:
             return
-        la,du,grip = self.gripList[0]
+        idx,la,du,grip = self.gripList[0]
         if (time.time() - la) >= (du/self.project_speed*100.0):
             self.gripList.pop(0)
             self.send_gripper(grip)
             self.get_logger().info(f"Send Gripper: {du/self.project_speed*100.0} {grip}")
+            self.pubTrajState(self.color_queue.queue[0],self.depth_queue.queue[0],idx)
+            self.get_logger().info(f"Publish TrajState: {idx}")
             if len(self.gripList) == 0:
                 return
-            self.gripList[0][0] = time.time()
+            self.gripList[0][1] = time.time()
+
     def PVTEnter(self):
         self.send_script("PVTEnter(1)")
-
 
     def PVTPoint(self,postions=np.array([0.2, -0.4, 0.35, 3.14159, 0.0, 3.14159]),
                  velocity=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
@@ -130,7 +162,7 @@ class Arm(Node):
         future = self.set_io_cli.call_async(req)
         return future.result()
 
-    def send_request(self,positions=np.array([-0.12, -0.52, 0.35, 3.14159, 0.0, 3.14159]),
+    def send_request(self,positions=np.array([-0.15,-0.5,0.35, 3.14159, 0.0, 3.14159]),
                      velocity=0.2, acc_time=0.05, blend_percentage=100, fine_goal=False):
         self.target_positions = positions
         print(self.target_positions)
@@ -192,11 +224,6 @@ class Arm(Node):
                     duration = cmd.duration
                     postions = np.array(cmd.positions)
                     velocity = np.array(cmd.velocity)
-                    # velocity = (postions-self.target_positions)
-                    # for i in range(3,6):
-                    #     if abs(velocity[i]) > np.pi:
-                    #         velocity[i] = velocity[i] - np.sign(velocity[i])*2*np.pi
-                    # velocity = velocity/duration
 
                     if cmd.idx == 0:
                         duration = 2
@@ -222,7 +249,7 @@ class Arm(Node):
                         assert abs(r) < 2
 
                     self.PVTPoint(postions=postions,velocity=velocity,duration=duration)
-                    self.gripList.append([time.time(),duration,cmd.grip])
+                    self.gripList.append([cmd.idx,time.time(),duration,cmd.grip])
             else:
                 self.noCmdCount += 1
                 if self.noCmdCount > 1000:
@@ -235,3 +262,6 @@ def main(args=None):
     arm = Arm()
     rclpy.spin(arm)
     rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

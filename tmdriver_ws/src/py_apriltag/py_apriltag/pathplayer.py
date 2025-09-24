@@ -84,9 +84,9 @@ T_A_a = np.linalg.inv(T_a_A)
 T_W_a = T_W_A @ T_A_a
 
 T_W_a = np.array(
-        [[ 0.02978282, 0.99917894,-0.02746683,-0.35052857],
-        [-0.99919005, 0.03050458, 0.0262435 ,-0.72868842],
-        [ 0.02705982, 0.02666297, 0.99927817, 0.01466152],
+        [[ 0.05392254, 0.99852385,-0.00651684,-0.32107211],
+        [-0.99834257, 0.05404189, 0.01978821,-0.7034037 ],
+        [ 0.02011118, 0.00543901, 0.99978295, 0.01247291],
         [ 0.        , 0.        , 0.        , 1.        ]]
 )
 print(T_W_a)
@@ -97,12 +97,18 @@ T_C_c = np.array([[ -1, 0, 0, 0],
 
 T_c_C = np.linalg.inv(T_C_c)
 
-T_G_c = np.array([[ 0.99779789, -0.06619949, -0.00412319, -0.00555809],
-                [ 0.06559438,  0.97563804,  0.20935089, -0.06929543],
-                [-0.00983618, -0.20916034,  0.97783189,  0.03819794],
-                [ 0.0,          0.0,          0.0,      1.0    ]]
+T_G_c = np.array(
+        [[ 0.99991712, -0.01191628,  0.00487421,-0.00767288],
+        [ 0.01069885,  0.97968111,  0.20027597, -0.06552731],
+        [-0.00716172, -0.20020722,  0.9797274,   0.03914132],
+        [ 0,          0,          0,          1,        ]]
 )
 T_c_G = np.linalg.inv(T_G_c)
+
+T_W_G0 = np.eye(4)
+T_W_G0[:3,:3] = R.from_euler('xyz',[3.14159,  0.0, 3.14159]).as_matrix()
+T_W_G0[:3,3] = np.array([-0.15,    -0.5,      0.35])
+
 alpha = 0.2
 lpf = [RealtimeLowPassFilter(alpha) for i in range(6)]
 def calVelocity(p0,p1,p2):
@@ -141,12 +147,12 @@ class FramePublisher(Node):
         self.joy_publisher = self.create_publisher(Float64MultiArray, '/joy', qos_profile_sensor_data)
 
         self.joyclient = self.create_client(Trajectory, '/trajectory')
-        # while not self.joyclient.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('service not available, waiting again...')
+        while not self.joyclient.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
         print('service available')
 
         self.req = Trajectory.Request()
-        self.lines = open('circle.txt', 'r').readlines()
+        self.lines = open('circle_resampled_30Hz_speed1p0x.txt', 'r').readlines()
         for i in range(len(self.lines)):
             g = 0.0
             line = self.lines[i].split(',')
@@ -157,7 +163,7 @@ class FramePublisher(Node):
             self.lines[i] = [stamp,x,y,z,px,py,pz,pw,g]
 
         self.i = 0
-        HZ = 90
+        HZ = 60
         self.create_timer(1/HZ, self.pathplay)
         print('init done')
 
@@ -178,14 +184,14 @@ class FramePublisher(Node):
 
 
     def a2w(self,p):
-        T_a_ci = np.eye(4)
-        T_a_ci[:3,:3] = R.from_quat(p[4:8]).as_matrix()
-        T_a_ci[:3,3] = np.array(p[1:4])
-        T_W_gi = T_W_a @ T_a_ci @ T_c_G
-        p[1] = T_W_gi[0,3]
-        p[2] = T_W_gi[1,3]
-        p[3] = T_W_gi[2,3]
-        p[4:8] = R.from_matrix(T_W_gi[:3,:3]).as_quat()
+        # T_a_ci = np.eye(4)
+        # T_a_ci[:3,:3] = R.from_quat(p[4:8]).as_matrix()
+        # T_a_ci[:3,3] = np.array(p[1:4])
+        # T_W_gi = T_W_a @ T_a_ci @ T_c_G
+        # p[1] = T_W_gi[0,3]
+        # p[2] = T_W_gi[1,3]
+        # p[3] = T_W_gi[2,3]
+        # p[4:8] = R.from_matrix(T_W_gi[:3,:3]).as_quat()
         return p
     
     def pathplay(self):
@@ -237,15 +243,24 @@ class FramePublisher(Node):
             velocity = calVelocity(p0.copy(),p1.copy(),p2.copy())    
             duration = p1[0] - p0[0]
         else:
-            duration = 2
+            duration = 0.75
+
         position = [p1[1],p1[2],p1[3],p1[4],p1[5],p1[6]]
+
+
+        if self.i == len(self.lines)-1:
+            velocity = [0.0,0.0,0.0,0.0,0.0,0.0]
+            print('velocity set to 0')
+
         self.get_logger().info('')
+        self.get_logger().info(f'idx:{self.i}')
         self.get_logger().info(f'duration:{duration}')
         self.get_logger().info(f'position:{position}')
         self.get_logger().info(f'velocity:{velocity}')
         self.get_logger().info(f'grip:{grip}')
-        assert duration > 0
 
+       
+        assert duration >= 0
         self.tf_broadcaster.sendTransform(t)
         res = self.trajectoryRequest(
             idx=self.i,

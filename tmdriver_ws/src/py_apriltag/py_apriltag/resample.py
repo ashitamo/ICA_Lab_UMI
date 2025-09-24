@@ -202,8 +202,8 @@ def resample_and_timescale(ts_in: np.ndarray, pos_in: np.ndarray, quat_in: np.nd
 # ----------------------------- Main --------------------------------
 def main():
     ap = argparse.ArgumentParser(description="Resample and time-scale a path file with SLERP orientations.")
-    ap.add_argument("--input",required=False, default="darwcircle/draw_circle_01.txt",type=str, help="Input CSV path (sec.nanosec,x,y,z,qx,qy,qz,qw)")
-    ap.add_argument("--freqs", type=float, nargs='+', default=[90.0], help="Output frequencies in Hz (one or more)")
+    ap.add_argument("--input",required=False, default="circle.txt",type=str, help="Input CSV path (sec.nanosec,x,y,z,qx,qy,qz,qw)")
+    ap.add_argument("--freqs", type=float, nargs='+', default=[30.0], help="Output frequencies in Hz (one or more)")
     ap.add_argument("--speeds", type=float, nargs='+', default=[1.0], help="Playback speeds (one or more). >1=faster")
     ap.add_argument("--start", choices=["absolute","zero"], default="absolute",
                     help="absolute: keep original start time; zero: start at 0.0")

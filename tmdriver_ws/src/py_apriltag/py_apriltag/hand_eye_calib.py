@@ -266,6 +266,7 @@ def main():
 def getTagPos():
     rclpy.init()
     handEyeCalib = HandEyeCalib()
+    print("initing...")
     for _ in range(200):
         rclpy.spin_once(handEyeCalib)
     print("init done")
@@ -273,12 +274,15 @@ def getTagPos():
     T_W_G[:3,:3] = R.from_euler('xyz',handEyeCalib.current_positions[3:], degrees=False).as_matrix()
     T_W_G[:3,3] = handEyeCalib.current_positions[:3]
     T_G_C = np.array(
-        [[ 0.99991712, -0.01191628,  0.00487421,-0.00767288],
-        [ 0.01069885,  0.97968111,  0.20027597, -0.06552731],
-        [-0.00716172, -0.20020722,  0.9797274,   0.03914132],
-        [ 0,          0,          0,          1,        ]]
+        [[ 0.99990673,-0.00810208, 0.01099475,-0.00939225],
+        [ 0.00567124, 0.97865893, 0.20541307,-0.06573175],
+        [-0.01242438,-0.20533156, 0.9786136 , 0.04108787],
+        [ 0.        , 0.        , 0.        , 1.        ]]
     )
-    T_C_A = handEyeCalib.detectTag()[0]
+    print('get tag pos...')
+    T_C_A,frame = handEyeCalib.detectTag()
+    cv2.imshow('frame',frame)
+    cv2.waitKey(0)
     T_W_a = T_W_G @ T_G_C @ T_C_A @ T_A_a
     handEyeCalib.get_logger().info("tag pos: %s\n" % np.array2string(T_W_a, separator=','))
     rclpy.shutdown()

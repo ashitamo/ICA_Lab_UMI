@@ -14,13 +14,13 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 # ========= 使用者可調參數 =========
-RATE_HZ        = 90.0         # 取樣頻率
-TOTAL_TIME_S   = 10.0         # 總時間（秒）
+RATE_HZ        = 60.0         # 取樣頻率
+TOTAL_TIME_S   = 7.0           # 總時間（秒）
 NUM_REV        = 1.0           # 繞圈圈數（1 = 一圈）
 RADIUS         = 0.12          # 圓半徑（公尺）
-CENTER_XY      = (0.0, -0.40)  # 圓心 (cx, cy)
-Z_CONST        = 0.4         # Z 高度
-PROFILE        = "ease"        # "constant" 或 "ease"
+CENTER_XY      = (-0.12, -0.35)  # 圓心 (cx, cy)
+Z_CONST        = 0.35         # Z 高度
+PROFILE        = "constant"        # "constant" 或 "ease"
 
 # ---- Look-At 相關 ----
 LOOK_AT_TARGET = False                         # True 開啟 / False 關閉
@@ -73,31 +73,30 @@ def look_at_quat(position: np.ndarray, target: np.ndarray, up_hint: np.ndarray):
 def write_path():
     path_file = Path("circle.txt").resolve()
     with path_file.open("w", encoding="utf-8") as f:
-        p0 = np.array([CX + RADIUS+0.1, CY + 0.1, Z_CONST,0,0,0,0])
-        p0[3:] = R.from_euler('xyz',[180,0,0], degrees=True).as_quat()
+        p0 = np.array([CX + RADIUS-0.1, CY - 0.2, Z_CONST,0,0,0,0])
+        p0[3:] = R.from_euler('xyz',[180,0,180], degrees=True).as_quat()
         start = 0.0
         t_abs = start
         sec   = int(t_abs)
         nsec  = int((t_abs - sec) * 1e9)
         f.write(f"{sec}.{nsec:09d},{p0[0]},{p0[1]},{p0[2]},{p0[3]},{p0[4]},{p0[5]},{p0[6]}\n") 
         
-        p1 = np.array([CX + RADIUS + 0.1, CY, Z_CONST,0,0,0,0])
-        p1[3:] = R.from_euler('xyz',[180,0,0], degrees=True).as_quat()
-        start = 0.5
+        p1 = np.array([CX + RADIUS, CY-0.1, Z_CONST,0,0,0,0])
+        p1[3:] = R.from_euler('xyz',[180,0,180], degrees=True).as_quat()
+        start = 2.0
         t_abs = start
         sec   = int(t_abs)
         nsec  = int((t_abs - sec) * 1e9)
         f.write(f"{sec}.{nsec:09d},{p1[0]},{p1[1]},{p1[2]},{p1[3]},{p1[4]},{p1[5]},{p1[6]}\n")
         
         p2 = np.array([CX + RADIUS, CY, Z_CONST,0,0,0,0])
-        p2[3:] = R.from_euler('xyz',[180,0,0], degrees=True).as_quat()
-        start = 1.0
+        p2[3:] = R.from_euler('xyz',[180,0,180], degrees=True).as_quat()
+        start = 3.0
         t_abs = start
         sec   = int(t_abs)
         nsec  = int((t_abs - sec) * 1e9)
         f.write(f"{sec}.{nsec:09d},{p2[0]},{p2[1]},{p2[2]},{p2[3]},{p2[4]},{p2[5]},{p2[6]}\n")
         
-        start = 1.5
         for i in range(N):
             # ---- 時間戳 ----
             t_abs = start + i * DT
@@ -116,7 +115,7 @@ def write_path():
             if LOOK_AT_TARGET:
                 qx, qy, qz, qw = look_at_quat(pos, TARGET_POINT, UP_HINT)
             else:
-                qx, qy, qz, qw  = R.from_euler('xyz', (180, 0, 0), degrees=True).as_quat()
+                qx, qy, qz, qw  = R.from_euler('xyz', (180, 0, 180), degrees=True).as_quat()
 
             # ---- 寫檔 ----
             f.write(f"{sec}.{nsec:09d},{x},{y},{z},{qx},{qy},{qz},{qw}\n")
