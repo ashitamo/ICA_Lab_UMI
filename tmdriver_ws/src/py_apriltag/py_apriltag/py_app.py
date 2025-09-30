@@ -11,12 +11,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from tf2_ros import TransformBroadcaster
-
-from dt_apriltags import Detector
-import os
-import cv2
 from scipy.spatial.transform import Rotation as R
-import time
+
 class RealtimeLowPassFilter:
     def __init__(self, alpha):
         """
@@ -84,12 +80,11 @@ T_A_a = np.linalg.inv(T_a_A)
 T_W_a = T_W_A @ T_A_a
 
 T_W_a = np.array(
-       [[-0.00951052, 0.99993697,-0.00596761,-0.3421927 ],
-        [-0.99983927,-0.00941855, 0.01525504,-0.68321488],
-        [ 0.01519787, 0.00611174, 0.99986582, 0.01203918],
+       [[-0.00523285, 0.99965024, 0.02592331,-0.38516459],
+        [-0.99970958,-0.00583948, 0.02338056,-0.65313945],
+        [ 0.02352376,-0.02579343, 0.99939048, 0.01126048],
         [ 0.        , 0.        , 0.        , 1.        ]]
-
-)
+ )
 print(T_W_a)
 T_C_c = np.array([[ -1, 0, 0, 0],
                   [ 0, 1, 0 ,0],

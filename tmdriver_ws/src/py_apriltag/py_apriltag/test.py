@@ -18,6 +18,7 @@ import os
 import cv2
 from scipy.spatial.transform import Rotation as R
 
+print(R.from_euler('xyz',np.array([180,0,180]), degrees=False).as_quat())
 
 '''
 給物體(T_C_O)的位置 我給相機要移到哪T_C_E
@@ -71,6 +72,109 @@ def c2e(p_C0_o0,T_a_C0):
     T_a_C1 = np.array([T_a_C1[0,3],T_a_C1[1,3],T_a_C1[2,3],temp[0],temp[1],temp[2],temp[3]])
     return T_a_C1
 
+def c2e(p_C0_o0,T_W_G):
+    '''
+    p_C0_o0 : np.array([x,y,z])
+    T_a_C0 : np.array([x,y,z,rx,ry,rz,rw])
+    =>
+    T_a_C1 np.array([x,y,z,rx,ry,rz,rw])
+    '''
+    import numpy as np
+    from scipy.spatial.transform import Rotation as R
+    temp = T_W_G.copy()
+    T_W_G = np.eye(4)
+    T_W_G[:3,:3] = R.from_euler('xyz',temp[3:], degrees=False).as_matrix()
+    T_W_G[:3,3] = temp[:3]
+
+    T_W_a = np.array(
+       [[-0.03971016, 0.99847915, 0.03824246,-0.34462655],
+        [-0.99899666,-0.04046567, 0.01918823,-0.66896035],
+        [ 0.02070655,-0.03744212, 0.99908424, 0.01046029],
+        [ 0.        , 0.        , 0.        , 1.        ]]
+    )
+    T_a_W = np.linalg.inv(T_W_a)
+
+    T_G_C = np.array(
+        [[ 0.99991712, -0.01191628,  0.00487421,-0.00767288],
+        [ 0.01069885,  0.97968111,  0.20027597, -0.06552731],
+        [-0.00716172, -0.20020722,  0.9797274,   0.03914132],
+        [ 0,          0,          0,          1,        ]]
+    )
+    T_G_E = np.array(
+        [[ 1, 0, 0, 0],
+        [ 0, 1, 0, 0],
+        [ 0, 0, 1, 0.164],
+        [ 0, 0, 0, 1]]
+    )
+    T_E_G = np.linalg.inv(T_W_G)
+    T_C_E = np.linalg.inv(T_G_C) @ T_G_E
+    T_E_C = np.linalg.inv(T_C_E) 
+
+    T_a_C0 = T_a_W @ T_W_G @ T_G_C
+    T_C0_o0 = np.array(
+        [[ 1, 0, 0, p_C0_o0[0]],
+         [ 0, 1, 0, p_C0_o0[1]],
+         [ 0, 0, 1, p_C0_o0[2]],
+         [ 0, 0, 0, 1]]
+    )
+    T_a_o0 = T_a_C0 @ T_C0_o0
+    T_a_E1 = T_a_o0
+    rot = R.from_matrix(T_a_E1[:3,:3]).as_euler('xyz', degrees=True)
+    rot[0],rot[1] = 180.0,0.0
+    T_a_E1[:3,:3] = R.from_euler('xyz', rot, degrees=True).as_matrix()
+    T_a_C1 = T_a_E1 @ T_E_C
+    temp = R.from_matrix(T_a_C1[:3,:3]).as_quat()
+    T_a_C1 = np.array([T_a_C1[0,3],T_a_C1[1,3],T_a_C1[2,3],temp[0],temp[1],temp[2],temp[3]])
+    return T_a_C1
+
+def rotCam2Horizon(T_a_ci):
+    '''
+    T_a_ci : np.array([x,y,z,rx,ry,rz,rw])
+    =>
+    T_a_ci : np.array([x,y,z,rx,ry,rz,rw]) rotate to horizon
+    '''
+    temp = np.eye(4)
+    temp[:3,:3] = R.from_quat(T_a_ci[3:]).as_matrix()
+    temp[:3,3] = np.array(T_a_ci[:3])
+    rot = R.from_matrix(temp[:3,:3]).as_euler('xyz', degrees=True)
+    rot[0],rot[1] = 180.0,0.0
+    temp[:3,:3] = R.from_euler('xyz', rot, degrees=True).as_matrix()
+    T_a_ci[3:] = R.from_matrix(temp[:3,:3]).as_quat()
+    T_a_ci[:3] = temp[:3,3]
+    return T_a_ci
+
+def rotGripper2Horizon(T_a_ci):
+    '''
+    T_a_ci : np.array([x,y,z,rx,ry,rz,rw])
+    =>
+    T_a_ci : np.array([x,y,z,rx,ry,rz,rw]) rotate to horizon
+    '''
+    T_G_C = np.array(
+        [[ 0.99991712, -0.01191628,  0.00487421,-0.00767288],
+        [ 0.01069885,  0.97968111,  0.20027597, -0.06552731],
+        [-0.00716172, -0.20020722,  0.9797274,   0.03914132],
+        [ 0,          0,          0,          1,        ]]
+    )
+    T_G_E = np.array(
+        [[ 1, 0, 0, 0],
+        [ 0, 1, 0, 0],
+        [ 0, 0, 1, 0.164],
+        [ 0, 0, 0, 1]]
+    )
+    temp = np.eye(4)
+    temp[:3,:3] = R.from_quat(T_a_ci[3:]).as_matrix()
+    temp[:3,3] = np.array(T_a_ci[:3])
+    T_a_ci = temp.copy()
+    T_a_E = T_a_ci @ np.linalg.inv(T_G_C) @ T_G_E
+    rot = R.from_matrix(T_a_E[:3,:3]).as_euler('xyz', degrees=True)
+    rot[0],rot[1] = 180.0,0.0
+    T_a_E[:3,:3] = R.from_euler('xyz', rot, degrees=True).as_matrix()
+    T_a_ci = T_a_E @ np.linalg.inv(T_G_E) @ T_G_C
+    x,y,z = T_a_ci[:3,3]
+    rx,ry,rz,rw = R.from_matrix(T_a_ci[:3,:3]).as_quat()
+    temp = np.array([x,y,z,rx,ry,rz,rw])
+
+    return temp
 
 class FramePublisher(Node):
 
@@ -82,9 +186,12 @@ class FramePublisher(Node):
         self.create_timer(0.016, self.p)
 
     def p(self):
-        p_C0_o0 = np.array([0.005784650413574422, 0.00402626632552662, 0.013999999646330252]) *10
-        T_a_C0 = np.array([-0.120461, 0.011688, 0.235501, -0.700088, 0.708054, 0.091179, -0.014905])
+        p_C0_o0 = np.array([-0.0205649,  -0.00739032,  0.26299999]) 
+        T_a_C0 = np.array([-0.1110163117957353, 0.16647660542206463, 0.3636705714520893, 0.763313098934646, -0.6381354191877848, -0.06177248713075337, 0.0795013182689336])
+        
 
+
+        pose_a_C0 = np.array([T_a_C0[0],T_a_C0[1],T_a_C0[2],T_a_C0[3],T_a_C0[4],T_a_C0[5],T_a_C0[6]])
         T_W_a = np.array(
             [[ 0.05392254, 0.99852385,-0.00651684,-0.32107211],
             [-0.99834257, 0.05404189, 0.01978821,-0.7034037 ],
@@ -199,6 +306,34 @@ class FramePublisher(Node):
         t.transform.rotation.y = q[1]        
         t.transform.rotation.z = q[2]
         t.transform.rotation.w = q[3]
+        self.tf_broadcaster.sendTransform(t)
+
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = 'april_tag'
+        t.child_frame_id = 'ch'
+        pose_a_C0 = rotCam2Horizon(pose_a_C0)
+        t.transform.translation.x = float(pose_a_C0[0])
+        t.transform.translation.y = float(pose_a_C0[1])
+        t.transform.translation.z = float(pose_a_C0[2])
+        t.transform.rotation.x = float(pose_a_C0[3])
+        t.transform.rotation.y = float(pose_a_C0[4])
+        t.transform.rotation.z = float(pose_a_C0[5])
+        t.transform.rotation.w = float(pose_a_C0[6])
+        self.tf_broadcaster.sendTransform(t)
+
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = 'april_tag'
+        t.child_frame_id = 'ceh'
+        pose_a_C1 = rotGripper2Horizon(pose_a_C0)
+        t.transform.translation.x = float(pose_a_C1[0])
+        t.transform.translation.y = float(pose_a_C1[1])
+        t.transform.translation.z = float(pose_a_C1[2])
+        t.transform.rotation.x = float(pose_a_C1[3])
+        t.transform.rotation.y = float(pose_a_C1[4])
+        t.transform.rotation.z = float(pose_a_C1[5])
+        t.transform.rotation.w = float(pose_a_C1[6])
         self.tf_broadcaster.sendTransform(t)
 
     

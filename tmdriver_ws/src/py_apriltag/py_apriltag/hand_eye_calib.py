@@ -19,8 +19,6 @@ from scipy.spatial.transform import Rotation as R
 import time
 import queue
 
-camera_params = [427.6786193847656,427.6786193847656,426.2860107421875,240.9849090576172]
-
 # 170 -415 190 mm 180 0 -90
 T_W_W = np.eye(4)
 
@@ -161,6 +159,84 @@ class HandEyeCalib(Node):
             T_C_A[:3,3] = r.pose_t.reshape(3)
             return T_C_A,frame
         return None,frame
+    
+    
+    def detectBoard(self):
+        """
+        回傳：
+            - T_C_B: 4x4 齊次矩陣（棋盤 B 在相機 C 座標系下的位姿）
+            - frame: 標註後影像（便於除錯）
+        若偵測失敗，回傳 (None, frame)
+        """
+
+        def make_chessboard_object_points(cols: int, rows: int, square_size: float, center_origin: bool = True):
+            """
+            產生棋盤 3D 角點（Z=0）：
+            - 若 center_origin=True，則以棋盤幾何中心為原點（手眼時較直觀）
+            - 若 False，則以 (0,0) 角點為原點（OpenCV 標準慣例）
+            """
+            objp = np.zeros((rows * cols, 3), dtype=np.float32)
+            # 先以左上角為原點排點（OpenCV 慣例）
+            grid = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2)
+            objp[:, :2] = grid * square_size
+
+            if center_origin:
+                # 平移到幾何中心為 (0,0)
+                center = np.array([(cols - 1) * square_size / 2.0,
+                                (rows - 1) * square_size / 2.0], dtype=np.float32)
+                objp[:, 0:2] -= center
+            return objp
+
+        frame = self.queue.get()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+
+        pattern_size = (CHESSBOARD_COLS, CHESSBOARD_ROWS)  # (cols, rows)
+        flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_FAST_CHECK | cv2.CALIB_CB_NORMALIZE_IMAGE
+        found, corners = cv2.findChessboardCorners(gray, pattern_size, flags=flags)
+
+        if not found:
+            return None, frame
+
+        # 角點亞像素化
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+        corners_refined = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+
+        # 建立棋盤在自身座標的 3D 點
+        object_points = make_chessboard_object_points(CHESSBOARD_COLS, CHESSBOARD_ROWS, SQUARE_SIZE, center_origin=True)
+
+        # PnP 解姿態（棋盤相對相機）
+        ok, rvec, tvec = cv2.solvePnP(object_points, corners_refined, CAM_MTX, DIST_COEFFS, flags=cv2.SOLVEPNP_ITERATIVE)
+        if not ok:
+            return None, frame
+
+        # 轉齊次矩陣
+        R_cb, _ = cv2.Rodrigues(rvec)  # 3x3
+        T_C_B = np.eye(4, dtype=np.float64)
+        T_C_B[:3, :3] = R_cb
+        T_C_B[:3,  3] = tvec.reshape(3)
+
+        # 視覺化（畫出角點與座標軸）
+        cv2.drawChessboardCorners(frame, pattern_size, corners_refined, found)
+
+        # 畫一個簡單的 3D 軸（長度 = 3*square_size）
+        axis_len = 3 * SQUARE_SIZE
+        axis = np.float32([[0, 0, 0],
+                        [axis_len, 0, 0],
+                        [0, axis_len, 0],
+                        [0, 0, axis_len]]).reshape(-1, 3)
+        imgpts, _ = cv2.projectPoints(axis, rvec, tvec, CAM_MTX, DIST_COEFFS)
+        imgpts = imgpts.astype(int)
+
+        # 畫線：原點->X(藍)、原點->Y(綠)、原點->Z(紅)
+        o = tuple(imgpts[0].ravel())
+        cv2.line(frame, o, tuple(imgpts[1].ravel()), (255, 0, 0), 2)
+        cv2.line(frame, o, tuple(imgpts[2].ravel()), (0, 255, 0), 2)
+        cv2.line(frame, o, tuple(imgpts[3].ravel()), (0, 0, 255), 2)
+
+        return T_C_B, frame
+
+
+
     def pub_tf(self,T,parent_frame,child_frame):
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
@@ -200,6 +276,116 @@ pos =[
     [-0.05, -0.57, 0.31, -3.14, 0.0, 1.57],
     [-0.15, -0.51, 0.27, -3.14, 0.0, 3.14],
 ]
+
+import math
+import numpy as np
+from typing import List, Tuple
+from scipy.spatial.transform import Rotation as R
+
+def generate_square_poses_faceZ_fixed_yaw(
+    center_xy: Tuple[float, float] = (-0.15, -0.50),  # 正方形中心 (cx, cy)
+    side: float = 0.24,                                # 邊長 (m)
+    z_list: List[float] = [0.30],                      # 一次輸出多個高度層
+    yaw_fixed: float = math.pi,                        # 你想要的固定 yaw（弧度）
+    center_z: float = None,                            # 中心點 z；若為 None 則使用各點自己的 z（僅朝向 XY 中心）
+    order: str = "snake"                               # "raster" 或 "snake" 走訪
+) -> List[List[float]]:
+    """
+    產生 3×3 網格 (共9點) × len(z_list) 的姿態：
+      - 位置落在以 (cx, cy) 為中心、邊長 side 的 3×3 格點
+      - 工具 +Z 軸指向正方形中心點 (cx, cy, center_z)
+      - 最後再沿著工具 +Z 軸旋轉 yaw_fixed（不改變指向）
+      - 回傳 [x, y, z, roll, pitch, yaw]（XYZ intrinsic，弧度）
+    """
+    cx, cy = center_xy
+    # 3×3：{-0.5*side, 0, +0.5*side}
+    offs = [-0.5 * side, 0.0, 0.5 * side]
+
+    # 先建立一層的 (x,y) 走訪序列
+    xy_seq = []
+    for j, dy in enumerate(offs):
+        row = [(cx + dx, cy + dy) for dx in offs]
+        if order == "snake" and (j % 2 == 1):
+            row.reverse()
+        xy_seq.extend(row)
+
+    poses = []
+    for z in z_list:
+        cz = z if center_z is None else center_z  # 若沒指定 center_z，就只在 XY 上指向中心
+        center_world = np.array([cx, cy, cz], dtype=float)
+
+        for (x, y) in xy_seq:
+            p = np.array([x, y, z], dtype=float)
+
+            # 指向向量：由當前點指向中心
+            v = center_world - p
+            norm = np.linalg.norm(v)
+            if norm < 1e-9:
+                # 萬一剛好在中心上，給個預設 z+ 指向
+                z_axis = np.array([0.0, 0.0, 1.0])
+            else:
+                z_axis = v / norm  # 工具 +Z 在世界座標的方向
+
+            # 建立一組正交基底，使第三列(軸)是 z_axis
+            # 先選一個不共線的參考向量
+            ref = np.array([1.0, 0.0, 0.0])
+            if abs(np.dot(ref, z_axis)) > 0.95:
+                ref = np.array([0.0, 1.0, 0.0])
+
+            x_axis = ref - np.dot(ref, z_axis) * z_axis
+            x_n = np.linalg.norm(x_axis)
+            if x_n < 1e-9:
+                # 退化保護
+                ref = np.array([0.0, 1.0, 0.0])
+                x_axis = ref - np.dot(ref, z_axis) * z_axis
+                x_n = np.linalg.norm(x_axis)
+            x_axis /= x_n
+            y_axis = np.cross(z_axis, x_axis)  # 右手座標
+
+            # 這是「+Z 指向中心」的基礎旋轉 R0（列向量為世界到工具？我們要世界R^tool）
+            # 我們希望 R 的列向量是工具軸在世界座標的表示 => R = [x_axis | y_axis | z_axis]
+            R0 = np.column_stack([x_axis, y_axis, z_axis])  # 3x3
+
+            # 沿工具 +Z 軸再轉 yaw_fixed（不改變指向）
+            Rz = np.array([[ math.cos(yaw_fixed), -math.sin(yaw_fixed), 0.0],
+                           [ math.sin(yaw_fixed),  math.cos(yaw_fixed), 0.0],
+                           [ 0.0,                  0.0,                 1.0]])
+            Rw = R0 @ Rz
+
+            # 轉成 XYZ intrinsic Euler（和你既有程式一致）
+            roll, pitch, yaw = R.from_matrix(Rw).as_euler('xyz', degrees=False)
+
+            poses.append([float(x), float(y), float(z),
+                          float(roll), float(pitch), float(yaw)])
+    return poses
+
+pos = generate_square_poses_faceZ_fixed_yaw(
+    center_xy = (0.0, -0.4),
+    side = 0.2,
+    z_list = [0.30],   # 一次產兩層高度
+    yaw_fixed = 3.14159,     # 你的指定 yaw（不會被自動更動）
+    center_z = 0.0,         # 只在 XY 指向中心；若想抬頭/低頭指中心某高度，填一個固定數值
+    order = "snake"
+)
+print(pos)
+
+
+camera_params = [427.6786193847656,427.6786193847656,426.2860107421875,240.9849090576172]
+# === Chessboard config ===
+# 棋盤內角點數（內點、交點數）：cols x rows，例如 9x6 代表每列9點、每行6點
+CHESSBOARD_COLS = 9
+CHESSBOARD_ROWS = 6
+SQUARE_SIZE = 0.025  # 每個小方格邊長（公尺）
+
+# 相機內參（fx, fy, cx, cy）與畸變係數（若未知可先全0）
+fx, fy, cx, cy = camera_params
+CAM_MTX = np.array([[fx, 0, cx],
+                    [0, fy, cy],
+                    [0,  0,  1]], dtype=np.float64)
+
+# OpenCV 預設 k1,k2,p1,p2,k3(,k4,k5,k6)；若你有Realsense標定檔可以填進來
+DIST_COEFFS = np.zeros((5, 1), dtype=np.float64)
+
 def main():
     rclpy.init()
     handEyeCalib = HandEyeCalib()
@@ -223,6 +409,7 @@ def main():
         T_W_G[:3,3] = handEyeCalib.current_positions[:3]
 
         T_C_A,frame = handEyeCalib.detectTag()
+        # T_C_A,frame = handEyeCalib.detectBoard()
         if T_C_A is not None:
             handEyeCalib.T_C_A_list.append(T_C_A)
             handEyeCalib.T_W_G_list.append(T_W_G)
@@ -250,15 +437,16 @@ def main():
        
 
         cv2.imshow('frame',frame)   
-        cv2.waitKey(100)
+        cv2.waitKey(0)
         idx += 1
     T_a_W = np.linalg.inv(T_W_a)
     for i in range(len(handEyeCalib.T_C_A_list)):
         T_C_A = handEyeCalib.T_C_A_list[i]
         T_W_G = handEyeCalib.T_W_G_list[i]
         T = T_W_G @ T_G_C @ T_C_A @ T_A_a @ T_a_W
-        handEyeCalib.get_logger().info("repjt rot err: %s" % R.from_matrix(T[:3,:3]).as_euler('xyz', degrees=True))
-        handEyeCalib.get_logger().info("repjt pos err: %s\n" % (T[:3,3].reshape(3)))
+        rot = R.from_matrix(T[:3,:3]).as_euler('xyz', degrees=True)
+        handEyeCalib.get_logger().info("repjt rot err: {}".format(np.array2string(rot,separator=',',precision=6)))
+        handEyeCalib.get_logger().info("repjt pos err: {}\n".format(np.array2string(T[:3,3],separator=',',precision=6)))
 
 
     rclpy.shutdown()
@@ -288,5 +476,5 @@ def getTagPos():
     rclpy.shutdown()
 
 if __name__ == '__main__':
-    # main()
-    getTagPos()
+    main()
+    # getTagPos()
