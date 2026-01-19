@@ -38,8 +38,8 @@ class Arm(Node):
 
         self.gripper_pub = self.create_publisher(GripperCmd, '/gripper/cmd', 10)
 
-        self.target_positions = np.array([0.0, -0.4, 0.35, 3.14159, 0.0, 3.14159])
-        self.current_positions = np.array([0.0, -0.415, 0.35, 3.14159, 0.0, 3.14159])
+        self.target_positions = np.array([0.5,0.0, 0.35, 3.14159, 0.0, -1.5708])
+        self.current_positions = np.array([0.5,0.0, 0.35, 3.14159, 0.0, -1.5708])
         self.project_speed = 5
 
         self.delay_queue_size = 10
@@ -182,7 +182,7 @@ class Arm(Node):
         future = self.set_io_cli.call_async(req)
         return future.result()
 
-    def send_request(self,positions=np.array([-0.15,-0.5,0.35, 3.14159, 0.0, 3.14159]),
+    def send_request(self,positions=np.array([0.3,0.0, 0.35, 3.14159, 0.0, -1.5708]),
                      velocity=0.2, acc_time=0.05, blend_percentage=100, fine_goal=False):
         self.target_positions = positions
         self.get_logger().info(f"Target Positions: {self.target_positions}")

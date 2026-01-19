@@ -403,6 +403,7 @@ def main():
     print(pos)
     rclpy.init()
     handEyeCalib = HandEyeCalib()
+    handEyeCalib.april_tag_size = 0.14142
     rclpy.spin_once(handEyeCalib)
     idx = 0
     while True:
@@ -496,7 +497,7 @@ def main():
 
 def getTagPos():
     # mean april tag
-    pos = [[-0.28, -0.21, 0.20, 3.14159, 0.0, 3.14159]]
+    pos = [[0.28, -0.33, 0.20, 3.14159, 0.0, -1.5708]]
     z_list = [0.20+i*0.04 for i in range(3)]
     first_angle = (180-40)*math.pi/180.0
     last_angle = (180+40)*math.pi/180.0
@@ -504,7 +505,7 @@ def getTagPos():
     for i,z in enumerate(z_list):
         yaw = first_angle + i*(last_angle-first_angle)/len(z_list)
         temp = generate_square_poses_faceZ_fixed_yaw(
-            center_xy = (-0.28, -0.21),  # 正方形中心 (cx, cy)
+            center_xy = (pos[0][0], pos[0][1]),  # 正方形中心 (cx, cy)
             side = 0.1,
             z_list = [z],   # 一次產兩層高度
             yaw_fixed = yaw,     # 你的指定 yaw（不會被自動更動）
@@ -521,6 +522,7 @@ def getTagPos():
 
     rclpy.init()
     handEyeCalib = HandEyeCalib()
+    handEyeCalib.april_tag_size = 0.05012
     print("init done")
     idx = 0
     T_W_a_list = []
