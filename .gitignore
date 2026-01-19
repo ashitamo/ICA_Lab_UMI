@@ -10,3 +10,6 @@ demo_*
 exe_data*
 exe_final*
 __pycache__
+*.pts
+*.pt
+ros2_ws/src/ipc_test/peg_30.pts
