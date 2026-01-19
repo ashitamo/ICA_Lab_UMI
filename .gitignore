@@ -2,3 +2,11 @@
 */install
 */log
 */devel
+*.pyc
+UMI_*
+*.zip
+*.pkl
+demo_*
+exe_data*
+exe_final*
+__pycache__

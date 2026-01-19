@@ -1,5 +1,7 @@
 import math
 
+import yaml
+
 from nav_msgs.msg import Path
 from geometry_msgs.msg import TransformStamped,PoseStamped
 from std_msgs.msg import Float64MultiArray
@@ -61,53 +63,18 @@ def quaternion_from_euler(ai, aj, ak):
 
     return q
 
-camera_params = [839.72913173,835.51579792,311.87321929,255.38762288]
-# camera_params = [839.72913173*2,835.51579792*2,311.87321929*2,255.38762288*2]
-
-# 170 -415 190 mm 180 0 -90
-T_W_W = np.eye(4)
-T_W_A = np.array([[ 0, 1, 0, 0.170],
-                  [ 1, 0, 0 ,-0.315],
-                  [ 0, 0, -1, 0.04],
-                  [ 0, 0,  0 ,1]])
-
-T_A_W = np.linalg.inv(T_W_A)
-
-
-    
-T_a_A =  np.array([[ 0, 1, 0, 0],
-                  [ 1, 0, 0 ,0],
-                  [ 0, 0, -1, 0],
-                  [ 0, 0,  0 ,1]])
-T_A_a = np.linalg.inv(T_a_A)
-
-T_W_a = T_W_A @ T_A_a
-
-T_W_a = np.array(
-        [[ 0.05392254, 0.99852385,-0.00651684,-0.32107211],
-        [-0.99834257, 0.05404189, 0.01978821,-0.7034037 ],
-        [ 0.02011118, 0.00543901, 0.99978295, 0.01247291],
-        [ 0.        , 0.        , 0.        , 1.        ]]
-)
-print(T_W_a)
-T_C_c = np.array([[ -1, 0, 0, 0],
-                  [ 0, 1, 0 ,0],
-                  [ 0, 0, -1 ,0],
-                  [ 0, 0,  0 ,1]])
-
-T_c_C = np.linalg.inv(T_C_c)
-
-T_G_c = np.array(
-        [[ 0.99991712, -0.01191628,  0.00487421,-0.00767288],
-        [ 0.01069885,  0.97968111,  0.20027597, -0.06552731],
-        [-0.00716172, -0.20020722,  0.9797274,   0.03914132],
-        [ 0,          0,          0,          1,        ]]
-)
-T_c_G = np.linalg.inv(T_G_c)
-
-T_W_G0 = np.eye(4)
-T_W_G0[:3,:3] = R.from_euler('xyz',[3.14159,  0.0, 3.14159]).as_matrix()
-T_W_G0[:3,3] = np.array([-0.15,    -0.5,      0.35])
+# Load from YAML file
+with open('ICA_Lab_UMI_Config.yaml', 'r') as file:
+    config_data = yaml.safe_load(file)
+    T_G_C = np.array(config_data['T_G_C'])
+    T_C_G = np.array(config_data['T_C_G'])
+    T_G_E = np.array(config_data['T_G_E'])
+    T_E_G = np.array(config_data['T_E_G'])
+    T_W_a = np.array(config_data['T_W_a'])
+    T_a_A = np.array(config_data['T_a_A'])
+    T_A_a = np.array(config_data['T_A_a'])
+    T_E_C = T_E_G @ T_G_C
+    T_C_E = np.linalg.inv(T_E_C)
 
 alpha = 0.2
 lpf = [RealtimeLowPassFilter(alpha) for i in range(6)]
@@ -134,10 +101,10 @@ def calVelocity(p0,p1,p2):
     v = [lpf[i].update(v[i]) for i in range(6)]
     return v
 
-class FramePublisher(Node):
+class PathPlayer(Node):
 
     def __init__(self):
-        super().__init__('pose_publisher')
+        super().__init__('path_player')
         # Initialize the transform broadcaster
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -152,7 +119,7 @@ class FramePublisher(Node):
         print('service available')
 
         self.req = Trajectory.Request()
-        self.lines = open('circle_resampled_30Hz_speed1p0x.txt', 'r').readlines()
+        self.lines = open('/home/lab606/ICA_Lab_UMI/nrap_03.txt', 'r').readlines()
         for i in range(len(self.lines)):
             g = 0.0
             line = self.lines[i].split(',')
@@ -184,14 +151,14 @@ class FramePublisher(Node):
 
 
     def a2w(self,p):
-        # T_a_ci = np.eye(4)
-        # T_a_ci[:3,:3] = R.from_quat(p[4:8]).as_matrix()
-        # T_a_ci[:3,3] = np.array(p[1:4])
-        # T_W_gi = T_W_a @ T_a_ci @ T_c_G
-        # p[1] = T_W_gi[0,3]
-        # p[2] = T_W_gi[1,3]
-        # p[3] = T_W_gi[2,3]
-        # p[4:8] = R.from_matrix(T_W_gi[:3,:3]).as_quat()
+        T_a_ci = np.eye(4)
+        T_a_ci[:3,:3] = R.from_quat(p[4:8]).as_matrix()
+        T_a_ci[:3,3] = np.array(p[1:4])
+        T_W_gi = T_W_a @ T_a_ci @ T_C_G
+        p[1] = T_W_gi[0,3]
+        p[2] = T_W_gi[1,3]
+        p[3] = T_W_gi[2,3]
+        p[4:8] = R.from_matrix(T_W_gi[:3,:3]).as_quat()
         return p
     
     def pathplay(self):
@@ -292,7 +259,7 @@ class FramePublisher(Node):
 
 def main():
     rclpy.init()
-    node = FramePublisher()
+    node = PathPlayer()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

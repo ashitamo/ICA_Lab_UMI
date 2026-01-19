@@ -6,7 +6,7 @@ from py_gripper_interfaces.srv import Trajectory
 from py_gripper_interfaces.msg import TrajState
 
 
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image,PointCloud2
 
 from std_msgs.msg import Float64MultiArray
 
@@ -42,47 +42,58 @@ class Arm(Node):
         self.current_positions = np.array([0.0, -0.415, 0.35, 3.14159, 0.0, 3.14159])
         self.project_speed = 5
 
-        self.delay_queue_size = 25
+        self.delay_queue_size = 10
         self.cmd_queue = queue.Queue(150)
         for _ in range(self.delay_queue_size):
             self.cmd_queue.put(None)
         self.joy_queue = queue.Queue(25)
 
         self.pos_sub = self.create_subscription(FeedbackState, 'feedback_states', self.pos_callback, 10)
-        # self.send_gripper(0.085)
+        self.send_gripper(0.085)
         self.send_event()
-        response = self.send_request(velocity=0.1,acc_time=0.1)
+        response = self.send_request(velocity=0.1, acc_time=0.1)
         while not self.is_arrived():
             rclpy.spin_once(self)
-        print('arrived')
+        self.get_logger().info('arrived')
         
         
-        self.color_queue = queue.Queue(2)
-        self.depth_queue = queue.Queue(2)
+        self.color_queue = queue.Queue(1)
+        self.depth_queue = queue.Queue(1)
+        self.points_queue = queue.Queue(1)
 
         self.color_img_sub = self.create_subscription(Image, '/camera/color/image_raw', self.color_callback, qos_profile_sensor_data)
         self.depth_img_sub = self.create_subscription(Image, '/camera/depth/image_rect_raw', self.depth_callback, qos_profile_sensor_data)
+        self.points_sub = self.create_subscription(PointCloud2, '/camera/depth/color/points', self.points_callback, qos_profile_sensor_data)
         self.traj_state_pub = self.create_publisher(TrajState, '/traj_state', 10)
         self.joy_sub = self.create_subscription(Float64MultiArray, 'joy', self.joy_callback, qos_profile_sensor_data)
         self.gripList = []
         self.noCmdCount = 0
-        self.PVTEnter()
+        self.pVTEnterBool = False
+        # self.PVTEnter()
         self.create_timer(0.01, self.run)
         self.create_timer(0.01, self.cmd_putter)
         self.create_timer(0.0025, self.gripperTimer)
 
-        self.create_service(Trajectory, 'trajectory', self.trajectory_callback)
-        print('init done')
+        self.create_service(Trajectory, '/trajectory', self.trajectory_callback)
+        self.get_logger().info('init done')
     
+    def points_callback(self,msg):
+        if self.points_queue.full():
+            self.points_queue.get()
+        self.points_queue.put(msg)
+        # self.get_logger().info("Get PointCloud2:")
+
     def color_callback(self,msg):
         if self.color_queue.full():
             self.color_queue.get()
         self.color_queue.put(msg)
+        # self.get_logger().info("Get Color Image:")
 
     def depth_callback(self,msg):
         if self.depth_queue.full():
             self.depth_queue.get()
         self.depth_queue.put(msg)
+        # self.get_logger().info("Get Depth Image:")
     
     def trajectory_callback(self,req:Trajectory.Request,res:Trajectory.Response):
         self.joy_queue.put(req)
@@ -100,6 +111,11 @@ class Arm(Node):
     def pos_callback(self,msg:FeedbackState):
         self.current_positions = msg.tool_pose
         self.project_speed = msg.project_speed
+        self.tcp_force = msg.tcp_force
+        F = (self.tcp_force[0]**2 + self.tcp_force[1]**2 + self.tcp_force[2]**2 )**0.5
+        # if (F) >= 40.0:
+        #     # self.send_event()
+        #     self.get_logger().warn(f"High TCP Force: {F}")
         # self.get_logger().info("Current Position: %s" % self.current_positions)
     
 
@@ -113,11 +129,12 @@ class Arm(Node):
             return False
         return True
 
-    def pubTrajState(self,cimg,dimg,idx):
+    def pubTrajState(self,cimg,dimg,pcloud,idx):
         msg = TrajState()
         msg.idx = idx
         msg.color_image = cimg
         msg.depth_image = dimg
+        msg.point_cloud = pcloud
         self.traj_state_pub.publish(msg)
 
     def gripperTimer(self):
@@ -127,15 +144,17 @@ class Arm(Node):
         if (time.time() - la) >= (du/self.project_speed*100.0):
             self.gripList.pop(0)
             self.send_gripper(grip)
-            self.get_logger().info(f"Send Gripper: {du/self.project_speed*100.0} {grip}")
-            self.pubTrajState(self.color_queue.queue[0],self.depth_queue.queue[0],idx)
-            self.get_logger().info(f"Publish TrajState: {idx}")
+            # self.get_logger().info(f"Send Gripper: {du/self.project_speed*100.0} {grip}")
+            self.pubTrajState(self.color_queue.queue[0],self.depth_queue.queue[0],self.points_queue.queue[0],idx)
+            # self.get_logger().info(f"Publish TrajState: {idx}")
             if len(self.gripList) == 0:
                 return
             self.gripList[0][1] = time.time()
 
     def PVTEnter(self):
+        self.pVTEnterBool = True
         self.send_script("PVTEnter(1)")
+        self.get_logger().info("PVT Entered")
 
     def PVTPoint(self,postions=np.array([0.2, -0.4, 0.35, 3.14159, 0.0, 3.14159]),
                  velocity=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
@@ -151,6 +170,7 @@ class Arm(Node):
         self.send_script("PVTPoint({}, {}, {})".format(postions, velocity, duration))
 
     def PVTExit(self):
+        self.pVTEnterBool = False
         self.send_script("PVTExit()")
 
     def set_io(self,io=0,value=0):
@@ -165,7 +185,7 @@ class Arm(Node):
     def send_request(self,positions=np.array([-0.15,-0.5,0.35, 3.14159, 0.0, 3.14159]),
                      velocity=0.2, acc_time=0.05, blend_percentage=100, fine_goal=False):
         self.target_positions = positions
-        print(self.target_positions)
+        self.get_logger().info(f"Target Positions: {self.target_positions}")
         positions = list(positions)
         set_positions_req = SetPositions.Request()
         set_positions_req.motion_type = SetPositions.Request.LINE_T
@@ -177,8 +197,8 @@ class Arm(Node):
         future = self.pos_cli.call_async(set_positions_req)
         # rclpy.spin_until_future_complete(self, future)
         return future.result()
-    
-    def send_gripper(self,gap=0.085):
+
+    def send_gripper(self,gap=0.085,speed=1.0,force=1.0):
         gap = gap if gap < 0.085 else 0.085
         gap = gap if gap > 0.0 else 0.0
 
@@ -187,8 +207,8 @@ class Arm(Node):
         grip_msg.emergency_release_dir = 0
         grip_msg.stop = False
         grip_msg.position = gap
-        grip_msg.speed = 1.0
-        grip_msg.force = 10.0
+        grip_msg.speed = speed
+        grip_msg.force = force
         self.gripper_pub.publish(grip_msg)
 
     def send_event(self):
@@ -213,49 +233,93 @@ class Arm(Node):
             cmd = self.cmd_queue.get()
             # print(self.cmd_queue.qsize())
             if cmd is not None:
-                if cmd.mode == Trajectory.Request.JOY:
+                if not hasattr(cmd, 'mode'):
                     self.noCmdCount = 0
-                    postions = np.array(cmd)*0.005
-                    velocity = postions/0.1
-                    postions = self.target_positions + postions
-                    self.PVTPoint(postions=postions,velocity=velocity,duration=0.1)
+                    # if len(cmd) != 6:
+                    #     self.send_gripper(cmd[0])
+                    # else:
+                    #     postions = np.array(cmd)*0.0025
+                    #     velocity = postions/0.1
+                    #     postions = self.target_positions + postions
+                    #     self.PVTPoint(postions=postions,velocity=velocity,duration=0.1)
+                    #     print(postions)
+                    postions = np.array(cmd[:6])
+                    grip = cmd[-1]
+                    self.send_request(
+                        positions=postions,velocity=0.15,acc_time=0.01,
+                        blend_percentage=100,fine_goal=False
+                    )
+                    self.send_gripper(grip)
+                    print(postions)
+                elif cmd.mode == Trajectory.Request.JOY:
+                    if self.pVTEnterBool:
+                        self.PVTExit()
+                    duration = cmd.duration
+                    postions = np.array(cmd.positions)
+                    velocity = np.array(cmd.velocity)
+                    idx = cmd.idx
+                    grip = cmd.grip
+                    
+                    vel = np.linalg.norm(velocity[:3])* 2.0
+                    avel = np.linalg.norm(velocity[3:6]) * 2.0
+                    vg = 0.0
+                    vel = max(vel,avel)
+                    vel = vel if vel < 0.21 else 0.21
+                    # vel = 0.2
+                    acc_time = 0.0 #duration * 0.025
+                    if vel >= 1e-3:
+                        self.send_request(
+                            positions=postions,velocity=vel,
+                            acc_time=acc_time,blend_percentage=100,
+                            fine_goal=False
+                        )
+                    self.send_gripper(grip,speed=vg)
+                    self.get_logger().info(f"Joy Command Index: {idx}")
+                    self.get_logger().info(f"Duration: {duration}")
+                    self.get_logger().info(f"Positions: {postions}")
+                    self.get_logger().info(f"Velocity: {vel}\n")
+                    self.get_logger().info(f"Gripper: {grip}\n")
+                    self.get_logger().info(f"Gripper Speed: {vg}\n")
+                    self.get_logger().info(f"Acceleration Time: {acc_time}\n")
                 elif cmd.mode == Trajectory.Request.PATH:
+                    if not self.pVTEnterBool:
+                        self.PVTEnter()
                     self.noCmdCount = 0
                     duration = cmd.duration
                     postions = np.array(cmd.positions)
                     velocity = np.array(cmd.velocity)
 
-                    if cmd.idx == 0:
-                        duration = 2
-                        mv = 0.05
-                        mw = 0.5
-                        dp = (postions-self.current_positions)
-                        for i in range(3,6):
-                            if abs(dp[i]) > np.pi:
-                                dp[i] = dp[i] - np.sign(dp[i])*2*np.pi
-                        t = np.concatenate([dp[:3]/mv, dp[3:]/mw])
-                        duration = np.max(np.abs(t))
-                        velocity = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+                    # if cmd.idx == 0:
+                    #     duration = 2
+                    #     mv = 0.05
+                    #     mw = 0.5
+                    #     dp = (postions-self.current_positions)
+                    #     for i in range(3,6):
+                    #         if abs(dp[i]) > np.pi:
+                    #             dp[i] = dp[i] - np.sign(dp[i])*2*np.pi
+                    #     t = np.concatenate([dp[:3]/mv, dp[3:]/mw])
+                    #     duration = np.max(np.abs(t))
+                    #     velocity = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-                    print(cmd.idx)
-                    print(postions)
-                    print(velocity)
-                    print(duration)
-                    print()
+                    self.get_logger().info(f"Command Index: {cmd.idx}")
+                    self.get_logger().info(f"Positions: {postions}")
+                    self.get_logger().info(f"Velocity: {velocity}")
+                    self.get_logger().info(f"Duration: {duration}\n")
 
                     for v in velocity[:3]:
+                        # self.get_logger().error(f"Linear Velocity: {v}")
                         assert abs(v) < 0.5
                     for r in velocity[3:]:
+                        # self.get_logger().error(f"Angular Velocity: {r}")
                         assert abs(r) < 2
-
+                    
                     self.PVTPoint(postions=postions,velocity=velocity,duration=duration)
                     self.gripList.append([cmd.idx,time.time(),duration,cmd.grip])
             else:
                 self.noCmdCount += 1
-                if self.noCmdCount > 1000:
-                    self.noCmdCount = 0
-                    # self.PVTExit()
-                    self.PVTEnter()
+                if self.noCmdCount > 100:
+                    self.pVTEnterBool = False
+
     
 def main(args=None):
     rclpy.init(args=args)

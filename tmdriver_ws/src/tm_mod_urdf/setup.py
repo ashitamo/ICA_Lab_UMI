@@ -17,7 +17,6 @@ setup(
     maintainer_email='ken.tsai@tm-robot.com',
     description='tm_mod_urdf',
     license='BSD-3-Clause',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'modify_urdf = tm_mod_urdf.modify_urdf:main',

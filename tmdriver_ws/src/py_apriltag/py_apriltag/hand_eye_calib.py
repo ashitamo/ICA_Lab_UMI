@@ -1,4 +1,5 @@
 import math
+from apriltag_grid_pose import AprilGridPoseEstimator
 from nav_msgs.msg import Path
 from geometry_msgs.msg import TransformStamped,PoseStamped
 from sensor_msgs.msg import Image
@@ -18,9 +19,7 @@ import cv2
 from scipy.spatial.transform import Rotation as R
 import time
 import queue
-
-# 170 -415 190 mm 180 0 -90
-T_W_W = np.eye(4)
+import yaml
 
 T_a_A =  np.array([[ 0, 1, 0, 0],
                   [ 1, 0, 0 ,0],
@@ -28,19 +27,13 @@ T_a_A =  np.array([[ 0, 1, 0, 0],
                   [ 0, 0,  0 ,1]])
 T_A_a = np.linalg.inv(T_a_A)
 
-T_C_c = np.array([[ -1, 0, 0, 0],
-                  [ 0, 1, 0 ,0],
-                  [ 0, 0, -1 ,0],
-                  [ 0, 0,  0 ,1]])
-
-T_c_C = np.linalg.inv(T_C_c)
-
-R_W_G = np.array([[ -1, 0, 0,],
-                  [ 0, -1, 0],
-                  [ 0, 0, 1]]) 
-R_G_W = np.linalg.inv(R_W_G)
-        
-    
+T_G_E = np.array(
+    [[ 1, 0, 0, 0],
+    [ 0, 1, 0, 0],
+    [ 0, 0, 1, 0.164],
+    [ 0, 0, 0, 1]]
+)
+T_E_G = np.linalg.inv(T_G_E)
 
 class HandEyeCalib(Node):
     def __init__(self):
@@ -58,6 +51,16 @@ class HandEyeCalib(Node):
         self.set_event_req = SetEvent.Request()
         self.target_positions = [0.2, -0.4, 0.35, 3.14159, 0.0, -1.57]
         self.current_positions = [0.2, -0.4, 0.35, 3.14159, 0.0, -1.57]
+        # AprilGrid parameters
+        self.tag_size = 0.022
+        self.spacing_ratio = 0.3
+
+
+        self.april_tag_size = 0.14142
+        self.april_tag_size = 0.05012
+        # self.april_tag_size = 0.1325
+
+        self.new_mtx, self.roi = cv2.getOptimalNewCameraMatrix(CAM_MTX, DIST_COEFFS, (848,480), 1, (848,480))
 
         # Initialize the transform broadcaster
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -71,10 +74,10 @@ class HandEyeCalib(Node):
                        decode_sharpening=0.25,
                        debug=0)
 
-        self.queue = queue.Queue(maxsize=1)
+        self.queue = queue.Queue(maxsize=2)
         self._sub = self.create_subscription(
             Image,
-            '/camera/infra1/image_rect_raw',
+            '/camera/color/image_raw',
             self.readCam,
             10
         )
@@ -86,7 +89,7 @@ class HandEyeCalib(Node):
         # self.get_logger().info("Current Position: %s" % self.current_positions)
 
     def is_arrived(self,error=0.001):
-        if sum((self.target_positions[i]-self.current_positions[i])**2 for i in range(6)) > error**2:
+        if sum((self.target_positions[i]-self.current_positions[i])**2 for i in range(3)) > error**2:
             return False
         return True
 
@@ -135,11 +138,28 @@ class HandEyeCalib(Node):
             self.queue.get()
         self.queue.put(frame)
 
+    def detectGrid(self):
+        frame = self.queue.queue[-1]
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+        
+        estimator = AprilGridPoseEstimator(self.tag_size,self.spacing_ratio,CAM_MTX,DIST_COEFFS)
+        results,frame = estimator.estimate_pose(frame,visualize=True)
+        return results,frame
+
+
     def detectTag(self):
-        frame = self.queue.get()
-        results = self.at_detector.detect(frame,True,camera_params,0.050)
-        cv2.circle(frame,(int(camera_params[2]),int(camera_params[3])),5,(0,0,255),-1)
+        frame = self.queue.queue[-1]
+        frame = cv2.undistort(frame, CAM_MTX, DIST_COEFFS, None, self.new_mtx)
+        x, y, w, h = self.roi
+        frame = frame[y:y+h, x:x+w]
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+        newcamera_params = [self.new_mtx[0,0], self.new_mtx[1,1], self.new_mtx[0,2], self.new_mtx[1,2]]
+        print(newcamera_params)
+        results = self.at_detector.detect(frame,True,newcamera_params,self.april_tag_size)
+
+        cv2.circle(frame,(int(newcamera_params[2]),int(newcamera_params[3])),5,(0,0,255),-1)
         if len(results) != 0:
+            # print(results[0])
             cv2.circle(frame,(int(results[0].center[0]),int(results[0].center[1])),5,(0,255,0),-1)
 
             cv2.line(frame,(int(results[0].corners[0][0]),int(results[0].corners[0][1])),
@@ -257,25 +277,7 @@ class HandEyeCalib(Node):
         t_W_G = [T[:3,3] for T in self.T_W_G_list]
         R_C_A = [T[:3,:3] for T in self.T_C_A_list]
         t_C_A = [T[:3,3] for T in self.T_C_A_list]
-        return cv2.calibrateHandEye(R_W_G, t_W_G, R_C_A, t_C_A, None, cv2.CALIB_HAND_EYE_DANIILIDIS)
-
-pos =[
-    [-0.125, -0.5, 0.3, 3.14159, 0.0, 3.14159],
-    [-0.1, -0.5, 0.275, -3.0, 0.0, 3.14159],
-    [-0.15, -0.45, 0.21, -2.6, 0.0, 3.14159],
-    [-0.2, -0.41, 0.27, -2.7, 0.0, -2.7],
-    [-0.075, -0.45, 0.3, -2.8, 0.0, 2.8],
-    [-0.1, -0.35, 0.21, -2.5, 0.0, 2.7],
-    [-0.205, -0.5, 0.3, -3.14, 0.0, -3.14],
-    [-0.195, -0.55, 0.275, -3.14, 0.0, -2.0],
-    [-0.25, -0.51, 0.23, -2.5, 0.0, -2.0],
-    [-0.05, -0.45, 0.22, -2.7, 0.0, 2.5],
-    [-0.02, -0.45, 0.24, -2.6, 0.0, 2.4],
-    [0.01, -0.55, 0.21, -2.75, 0.0, 2.0],
-    [-0.1, -0.6, 0.27, -3.14, 0.0, 1.8],
-    [-0.05, -0.57, 0.31, -3.14, 0.0, 1.57],
-    [-0.15, -0.51, 0.27, -3.14, 0.0, 3.14],
-]
+        return cv2.calibrateHandEye(R_W_G, t_W_G, R_C_A, t_C_A, None, cv2.CALIB_HAND_EYE_TSAI)
 
 import math
 import numpy as np
@@ -359,23 +361,20 @@ def generate_square_poses_faceZ_fixed_yaw(
                           float(roll), float(pitch), float(yaw)])
     return poses
 
-pos = generate_square_poses_faceZ_fixed_yaw(
-    center_xy = (0.0, -0.4),
-    side = 0.2,
-    z_list = [0.30],   # 一次產兩層高度
-    yaw_fixed = 3.14159,     # 你的指定 yaw（不會被自動更動）
-    center_z = 0.0,         # 只在 XY 指向中心；若想抬頭/低頭指中心某高度，填一個固定數值
-    order = "snake"
-)
-print(pos)
 
 
-camera_params = [427.6786193847656,427.6786193847656,426.2860107421875,240.9849090576172]
 # === Chessboard config ===
 # 棋盤內角點數（內點、交點數）：cols x rows，例如 9x6 代表每列9點、每行6點
-CHESSBOARD_COLS = 9
+CHESSBOARD_COLS = 10
 CHESSBOARD_ROWS = 6
-SQUARE_SIZE = 0.025  # 每個小方格邊長（公尺）
+SQUARE_SIZE = 0.0254  # 每個小方格邊長（公尺）
+
+camera_params = [434.5713806152344, 433.9692077636719, 422.2452392578125, 241.36700439453125]
+# # OpenCV 預設 k1,k2,p1,p2,k3(,k4,k5,k6)；若你有Realsense標定檔可以填進來
+DIST_COEFFS = np.array(
+    [-0.054195329546928406, 0.06144030764698982, 8.257640001829714e-05, 0.0007601580582559109,-0.02074556238949299],
+    dtype=np.float64
+)
 
 # 相機內參（fx, fy, cx, cy）與畸變係數（若未知可先全0）
 fx, fy, cx, cy = camera_params
@@ -383,23 +382,40 @@ CAM_MTX = np.array([[fx, 0, cx],
                     [0, fy, cy],
                     [0,  0,  1]], dtype=np.float64)
 
-# OpenCV 預設 k1,k2,p1,p2,k3(,k4,k5,k6)；若你有Realsense標定檔可以填進來
-DIST_COEFFS = np.zeros((5, 1), dtype=np.float64)
-
 def main():
+    ## hand-eye calibration positions
+    pos = [[-0.00, -0.38, 0.3, 3.14159, 0.0, 3.14159]]
+    z_list = [0.25+i*0.01 for i in range(11)]
+    first_angle = (-90)*math.pi/180.0
+    last_angle = (180)*math.pi/180.0
+    import random
+    for i,z in enumerate(z_list):
+        yaw = first_angle + i*(last_angle-first_angle)/len(z_list)
+        temp = generate_square_poses_faceZ_fixed_yaw(
+            center_xy = (-0.0, -0.38),  # 正方形中心 (cx, cy)
+            side = 0.25,
+            z_list = [z],   # 一次產兩層高度
+            yaw_fixed = yaw,     # 你的指定 yaw（不會被自動更動）
+            center_z = 0.0,         # 只在 XY 指向中心；若想抬頭/低頭指中心某高度，填一個固定數值
+            order = "snake"
+        )
+        pos.extend(temp)
+    print(pos)
     rclpy.init()
     handEyeCalib = HandEyeCalib()
     rclpy.spin_once(handEyeCalib)
     idx = 0
     while True:
+        print("move to position idx:",idx,"/",len(pos))
         if idx >= len(pos):
             break
         print("current positions: ",handEyeCalib.current_positions)
         positions = pos[idx]
-        handEyeCalib.send_request(positions,fine_goal=True,blend_percentage=0)
+        handEyeCalib.send_request(positions,fine_goal=True,blend_percentage=0,velocity=0.2)
 
-        while not handEyeCalib.is_arrived():
-            rclpy.spin_once(handEyeCalib)
+        while not handEyeCalib.is_arrived(0.01):
+            # print(handEyeCalib.current_positions)
+            rclpy.spin_once(handEyeCalib, timeout_sec=0.1)
         
         for _ in range(200):
             rclpy.spin_once(handEyeCalib)
@@ -407,8 +423,9 @@ def main():
         T_W_G = np.eye(4)
         T_W_G[:3,:3] = R.from_euler('xyz',handEyeCalib.current_positions[3:], degrees=False).as_matrix()
         T_W_G[:3,3] = handEyeCalib.current_positions[:3]
-
+        
         T_C_A,frame = handEyeCalib.detectTag()
+        # T_C_A,frame = handEyeCalib.detectGrid()
         # T_C_A,frame = handEyeCalib.detectBoard()
         if T_C_A is not None:
             handEyeCalib.T_C_A_list.append(T_C_A)
@@ -437,9 +454,12 @@ def main():
        
 
         cv2.imshow('frame',frame)   
-        cv2.waitKey(0)
+        cv2.waitKey(100)
         idx += 1
     T_a_W = np.linalg.inv(T_W_a)
+
+    roterr = []
+    poserr = []
     for i in range(len(handEyeCalib.T_C_A_list)):
         T_C_A = handEyeCalib.T_C_A_list[i]
         T_W_G = handEyeCalib.T_W_G_list[i]
@@ -447,34 +467,137 @@ def main():
         rot = R.from_matrix(T[:3,:3]).as_euler('xyz', degrees=True)
         handEyeCalib.get_logger().info("repjt rot err: {}".format(np.array2string(rot,separator=',',precision=6)))
         handEyeCalib.get_logger().info("repjt pos err: {}\n".format(np.array2string(T[:3,3],separator=',',precision=6)))
-
+        roterr.append(rot)
+        poserr.append(T[:3,3])
+    roterr = np.array(roterr)
+    poserr = np.array(poserr)
+    handEyeCalib.get_logger().info("mean rot err: {}".format(np.array2string(np.mean(np.abs(roterr),axis=0),separator=',',precision=6)))
+    handEyeCalib.get_logger().info("std rot err: {}".format(np.array2string(np.std(np.abs(roterr),axis=0),separator=',',precision=6)))
+    handEyeCalib.get_logger().info("mean pos err: {}".format(np.array2string(np.mean(np.abs(poserr),axis=0),separator=',',precision=6)))
+    handEyeCalib.get_logger().info("std pos err: {}".format(np.array2string(np.std(np.abs(poserr),axis=0),separator=',',precision=6)))
+    
+    import pickle
+    filename = 'calib_results{}.pkl'.format(counter:=len([name for name in os.listdir('.') if os.path.isfile(name) and name.startswith('calib_results') and name.endswith('.pkl')]))
+    with open(filename,'wb') as f:
+        pickle.dump([handEyeCalib.T_W_G_list,handEyeCalib.T_C_A_list,T_G_C,T_a_W],f)
+    
+     # Write to YAML file
+    with open('ICA_Lab_UMI_Config.yaml', 'r') as file:
+        config_data = yaml.safe_load(file)
+    config_data['T_A_a'] = T_A_a.tolist()
+    config_data['T_a_A'] = T_a_A.tolist()
+    config_data['T_G_C'] = T_G_C.tolist()
+    config_data['T_C_G'] = np.linalg.inv(T_G_C).tolist()
+    with open('ICA_Lab_UMI_Config.yaml', 'w') as file:
+        yaml.dump(config_data, file, default_flow_style=False)
 
     rclpy.shutdown()
+
 
 def getTagPos():
+    # mean april tag
+    pos = [[-0.28, -0.21, 0.20, 3.14159, 0.0, 3.14159]]
+    z_list = [0.20+i*0.04 for i in range(3)]
+    first_angle = (180-40)*math.pi/180.0
+    last_angle = (180+40)*math.pi/180.0
+    import random
+    for i,z in enumerate(z_list):
+        yaw = first_angle + i*(last_angle-first_angle)/len(z_list)
+        temp = generate_square_poses_faceZ_fixed_yaw(
+            center_xy = (-0.28, -0.21),  # 正方形中心 (cx, cy)
+            side = 0.1,
+            z_list = [z],   # 一次產兩層高度
+            yaw_fixed = yaw,     # 你的指定 yaw（不會被自動更動）
+            center_z = 0.0,         # 只在 XY 指向中心；若想抬頭/低頭指中心某高度，填一個固定數值
+            order = "snake"
+        )
+        pos.extend(temp[3:])
+    print(pos)
+    # Load from YAML file
+    with open('ICA_Lab_UMI_Config.yaml', 'r') as file:
+        config_data = yaml.safe_load(file)
+        T_G_C = np.array(config_data['T_G_C'])
+        T_C_G = np.array(config_data['T_C_G'])
+
     rclpy.init()
     handEyeCalib = HandEyeCalib()
-    print("initing...")
-    for _ in range(200):
-        rclpy.spin_once(handEyeCalib)
     print("init done")
-    T_W_G = np.eye(4)
-    T_W_G[:3,:3] = R.from_euler('xyz',handEyeCalib.current_positions[3:], degrees=False).as_matrix()
-    T_W_G[:3,3] = handEyeCalib.current_positions[:3]
-    T_G_C = np.array(
-        [[ 0.99990673,-0.00810208, 0.01099475,-0.00939225],
-        [ 0.00567124, 0.97865893, 0.20541307,-0.06573175],
-        [-0.01242438,-0.20533156, 0.9786136 , 0.04108787],
-        [ 0.        , 0.        , 0.        , 1.        ]]
-    )
-    print('get tag pos...')
-    T_C_A,frame = handEyeCalib.detectTag()
-    cv2.imshow('frame',frame)
-    cv2.waitKey(0)
-    T_W_a = T_W_G @ T_G_C @ T_C_A @ T_A_a
-    handEyeCalib.get_logger().info("tag pos: %s\n" % np.array2string(T_W_a, separator=','))
+    idx = 0
+    T_W_a_list = []
+    while idx<len(pos):
+        print("move to position idx:",idx,"/",len(pos))
+        print("current positions: ",handEyeCalib.current_positions)
+        positions = pos[idx]
+        handEyeCalib.send_request(positions,fine_goal=True,blend_percentage=0,velocity=0.1)
+        while not handEyeCalib.is_arrived(0.01):
+            # print(handEyeCalib.current_positions)
+            rclpy.spin_once(handEyeCalib, timeout_sec=0.1)
+        idx += 1
+        for _ in range(200):
+            rclpy.spin_once(handEyeCalib)
+        print('arrived')
+        
+        T_W_G = np.eye(4)
+        T_W_G[:3,:3] = R.from_euler('xyz',handEyeCalib.current_positions[3:], degrees=False).as_matrix()
+        T_W_G[:3,3] = handEyeCalib.current_positions[:3]
+
+        T_C_A,frame = handEyeCalib.detectTag()
+        
+        cv2.imshow('frame',frame)
+        cv2.waitKey(100)
+        if T_C_A is None:
+            print("no tag detected, please adjust the pose")
+            continue
+        T_W_a = T_W_G @ T_G_C @ T_C_A @ T_A_a
+        T_W_a_list.append(T_W_a)
+        handEyeCalib.get_logger().info("tag pos: \n%s" % np.array2string(T_W_a, separator=','))
+
+
     rclpy.shutdown()
+    T_W_a = np.mean(np.array(T_W_a_list),axis=0)
+    T_a_W = np.linalg.inv(T_W_a)
+    print("T_W_a: \n",T_W_a)
+    print("T_a_W: \n",T_a_W)
+
+    # Write to YAML file
+    with open('ICA_Lab_UMI_Config.yaml', 'r') as file:
+        config_data = yaml.safe_load(file)
+    config_data['T_A_a'] = T_A_a.tolist()
+    config_data['T_a_A'] = T_a_A.tolist()
+    config_data['T_W_a'] = T_W_a.tolist()
+    config_data['T_a_W'] = T_a_W.tolist()
+    config_data['T_G_E'] = T_G_E.tolist()
+    config_data['T_E_G'] = T_E_G.tolist()
+    with open('ICA_Lab_UMI_Config.yaml', 'w') as file:
+        yaml.dump(config_data, file, default_flow_style=False)
+
 
 if __name__ == '__main__':
-    main()
-    # getTagPos()
+    # main()
+    getTagPos()
+
+'''
+[[-0.01433173, 0.99963671, 0.02282667,-0.34401851],
+ [-0.99989453,-0.01438161, 0.00202218,-0.65156833],
+ [ 0.00234972,-0.02279528, 0.99973739, 0.01457564],
+ [ 0.        , 0.        , 0.        , 1.        ]]
+
+ [[-0.01156194, 0.99988935, 0.00936036,-0.34356403],
+ [-0.99990892,-0.01162633, 0.00685366,-0.65177863],
+ [ 0.00696173,-0.00928026, 0.9999327 , 0.01568898],
+ [ 0.        , 0.        , 0.        , 1.        ]]
+
+
+ [[-0.01553806, 0.99919739, 0.03692071,-0.34480372],
+ [-0.99986662,-0.01571304, 0.0044538 ,-0.65188919],
+ [ 0.00503036,-0.03684658, 0.99930827, 0.01596489],
+ [ 0.        , 0.        , 0.        , 1.        ]]
+
+ [[-0.0110116 , 0.99992776,-0.0048186 ,-0.34385463],
+ [-0.999871  ,-0.01095437, 0.01174702,-0.65254015],
+ [ 0.01169339, 0.00494733, 0.99991939, 0.01354095],
+ [ 0.        , 0.        , 0.        , 1.        ]]
+
+ 
+
+'''

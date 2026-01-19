@@ -20,7 +20,6 @@ setup(
     maintainer_email='hsun91chen@gmail.com',
     description='TODO: Package description',
     license='TODO: License declaration',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'arm_cmd = py_gripper.arm_cmd:main',
@@ -28,6 +27,7 @@ setup(
             'arm = py_gripper.arm:main',
             'joy = py_gripper.joy:main',
             'arm_feedback_states = py_gripper.arm_feedback_states:main',
+            'arm_cmd_port = py_gripper.arm_cmd_port:main',
         ],
     },
 )

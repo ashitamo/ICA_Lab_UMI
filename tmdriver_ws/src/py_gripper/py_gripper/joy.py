@@ -44,7 +44,7 @@ class Joy(Node):
         listener.start()
         self.grip = False
         self.create_timer(0.1, self.run)
-        self.joy_pub = self.create_publisher(Float64MultiArray, '/joy', 10)
+            
         
     def run(self):
         msg = Float64MultiArray()
@@ -52,22 +52,22 @@ class Joy(Node):
         data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         
         if 'w' in self.currently_pressed:
-            data[0] = 1.0
+            data[1] = -1.0
             pressBool = True
             print('w')
 
         elif 's' in self.currently_pressed:
-            data[0] = -1.0
+            data[1] = 1.0
             pressBool = True
             print('s')
 
         if 'a' in self.currently_pressed:
-            data[1] = 1.0
+            data[0] = 1.0
             pressBool = True
             print('a')
 
         elif 'd' in self.currently_pressed:
-            data[1] = -1.0
+            data[0] = -1.0
             pressBool = True
             print('d')
 

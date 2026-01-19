@@ -1,0 +1,15 @@
+
+python3 pkl_convert.py demo_data1/data_list_new1.pkl
+python3 time_embedding.py demo_data1/
+
+
+python3 task_segmentation_twophase.py demo_data1 exe_demo1
+python3 task_segmentation_twophase.py demo_data1 exe_demo1
+python3 task_manager_traject.py demo_data1 exe_data1/task_segmentation.json
+/bin/python3 /home/lab606/ICA_Lab_UMI/ros2_ws/src/data_process/aa_v1_orientation_traject.py
+
+
+
+python3 pkl_convert.py /home/lab606/ICA_Lab_UMI/UMI_demo/demo.pkl
+python3 time_embedding.py /home/lab606/ICA_Lab_UMI/UMI_demo
+python3 task_segmentation_twophase.py /home/lab606/ICA_Lab_UMI/UMI_demo/demo.pkl /home/lab606/ICA_Lab_UMI/UMI_Exec

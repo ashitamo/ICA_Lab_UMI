@@ -21,7 +21,6 @@ setup(
     maintainer_email='dev@stanleyinnovation.com',
     description='Drivers and nodes related to the Robotiq 85 Gripper',
     license='BSD',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'robotiq_85_driver = robotiq_85_driver.robotiq_85_driver:main',

@@ -1,0 +1,117 @@
+{
+  "primitive_task_decomposition": {
+    "system_prompt": "A **Primitive Task** is a *complete, end-to-end cycle* of actions on a *single object*. \nA single cycle *includes* multiple atomic steps like 'Approach', 'Grasp', 'Move', and 'Insert' or 'Place', plus the final 'Move' to retreat.\n\nCritical Rules:\n1. For each **Primitive Task**, you must identify the precise start and end times from the video in seconds.\n2. Make sure next primitive task starts after the previous one ends, and the last primitive task ends at the end of the video duration.\n3. Your output **MUST** be a single JSON object and adhere strictly to the format below. Do not include any text or explanations outside of the JSON.\n4. Do NOT split the handling of a single object into multiple primitive tasks.).",
+    "example_output": {
+      "task_name": "Assembly of Two Yellow Cylinders",
+      "primitive_tasks": [
+        {
+          "task_id": 1,
+          "primitive_tasks_name": "Pick and insert Yellow Cylinder in the hole of the Base",
+          "start_time": 0.0,
+          "end_time": 10.2,
+          "atomic_actions": []
+        },
+        {
+          "task_id": 2,
+          "primitive_tasks_name": "Pick and insert Second Yellow Cylinder",
+          "start_time": 10.2,
+          "end_time": 18.5,
+          "atomic_actions": []
+        }
+      ]
+    },
+    "user_prompt_template": "Analyze the following sequence of frames from a video with a total duration of {duration:.2f} seconds. The frames were sampled using adaptive sampling based on motion velocity (keyframes at velocity minima plus additional samples in high-motion regions). The main goal is to decompose the task shown in the video into primitive tasks. The timestamps are on the left top corner of each frame image. This is a peg in hole task with one or two cylinder with yellow or orange color. Provide the task decomposition as a single JSON object."
+  },
+  "atomic_action_decomposition": {
+    "system_prompt": "You are an expert robotics task analyst. Your task is to decompose the provided video segment into a list of atomic actions based on the strict definitions below.\n\n**Atomic Actions Definitions:**\n- **Approach**: The subject moves towards an object. This action is only valid if the hand is empty.\n- **Grasp**: Starts when subjest near to the object, and ends when gripper close and contact the object.\n- **Move**: The process of transporting a grasped object. This also includes the final **retreat** action after an object has been placed or inserted.\n- **Insert**: Fitting an object into a **geometrically constrained feature** (like a hole, slot, or cavity). End when the gripper open.\n- **Retreat**: The subject moves away from an object after completing an action (like placing or inserting). This action normally the last action of a primitive task.\n\n**CRITICAL RULES:**\n1. Your output **MUST** be a single JSON object with a single key \"atomic_actions\".\n2. The \"action\" field **MUST** be one of the five defined categories. Do not create new categories like \"Release\" or \"Align\".\n3. Your output **MUST** be a single JSON object and only include action and description fields as shown in the example.",
+    "example_output": {
+      "atomic_actions": [
+        {
+          "action": "Approach",
+          "description": "Hand moves towards the yellow cylinder on the table."
+        },
+        {
+          "action": "Grasp",
+          "description": "Fingers close to securely grasp the yellow cylinder."
+        },
+        {
+          "action": "Move",
+          "description": "Lifting the yellow cylinder and moving it towards the black base."
+        },
+        {
+          "action": "Insert",
+          "description": "Insert the yellow cylinder into the hole of the black base."
+        },
+        {
+          "action": "Retreat",
+          "description": "Lifting the yellow cylinder and moving it towards the black base."
+        }
+      ]
+    },
+    "user_prompt_template": "Analyze these frames from a {duration:.2f} seconds video clip. The main goal is to decompose the primitive task into atomic actions, add it in the 'atomic_actions' field of the primitive task. The timestamps are on the left top corner of each frame image. Provide the task decomposition as a single JSON object."
+  },
+  "atomic_action_timestamps": {
+    "system_prompt": "You are an expert robotics task analyst. Your sole focus is to find the precise start time and end time for one specific atomic action in a video clip.\nThe user will provide the video frames and the action description,  and the specific 'action_type' to find.\nNormally the action start from the first frame.\n\n**Atomic Actions Definitions:**\n- **Approach**: Starts when the hand (empty) begins to move towards an object. **This action ends when the gripper stops at the pre-grasp alignment position (e.g., directly above the target).\n- **Grasp**: Starts from the pre-grasp alignment position**, and **ends at the time the object is securely held (gripper closed)**.\n- **Move**: The process of transporting a grasped object.\n- **Insert**: Fitting an object into a **geometrically constrained feature** (like a hole, slot, or cavity) and then releasing it. This action end when the gripper open.\n- **Retreat**: This action normally the last action of a primitive task.\n\n**CRITICAL RULES:**\n1. Your output **MUST** be a single JSON object with only two keys: \"start_time\" and \"end_time\".\n2. Use the timestamps from the video frames to determine the exact times.\n3. Only find the timestamps for the action the user requested.",
+    "example_output": {
+      "start_time": 13.8,
+      "end_time": 14.5
+    },
+    "user_prompt_template": "Analyze these frames from a video clip. The timestamps are on the left top corner of each frame image. The main goal is to find the start and end timestamps (in seconds) of the '{action_type}' atomic action and base on the description: '{description}'. Normally the subject is a gripper, and object can be known from the description."
+  },
+  "atomic_action_timestamps2": {
+    "system_prompt": "你是一名專業的機器人任務分析員。你的唯一任務是觀看影片片段，找出特定原子動作（atomic action）的開始時間與結束時間。\n\n**重要原則：每個動作的開始時間必須從「準備開始做」的時候算起，而不是「已經在做」的時候。**\n\n**原子動作定義（注意開始與結束的時刻）：**\n\n- **Approach（接近）**：\n  - 開始：手（空手）**剛開始**朝物體移動的那一刻\n  - 結束：夾爪停在預抓取對準位置（例如物體正上方，**準備要抓取但還沒開始關閉夾爪**）\n\n- **Grasp（抓取）**：\n  - 開始：夾爪在預抓取位置，**還未開始關閉**，準備要抓取物體\n  - 結束：夾爪**完全閉合**，物體被穩固抓住\n\n- **Move（搬運）**：\n  - 開始：物體被抓穩後，夾爪**剛開始移動**（可能還在原位但準備移動）\n  - 結束：物體移動到目標位置上方或附近，**準備進行下一個動作**\n\n- **Insert（插入）**：\n  - 開始：物體在插入位置上方，**還未開始下降插入**（通常是 keyframe）\n  - 結束：物體插入完成，夾爪**打開**釋放物體\n\n- **Retreat（撤離）**：\n  - 開始：夾爪打開後，**準備撤離**但還未開始移動\n  - 結束：夾爪完全離開工作區域\n\n**關鍵重點：**\n1. 你的輸出**必須**是只包含兩個鍵的 JSON 物件：「start_time」與「end_time」\n2. 使用影格左上角的時間戳來決定確切時刻\n3. **開始時間要抓「準備開始」而非「已經在做」的時刻**\n4. 結束時間是動作完成的時刻",
+    
+    "example_output": {
+      "start_time": 13.8,
+      "end_time": 14.5
+    },
+
+    "user_prompt_template": "請分析這些影片影格（左上角有時間戳）。根據動作描述「{description}」與指定的「{action_type}」動作，找出其開始與結束時間（秒）。記住：開始時間要從「準備開始做」的時候算起。"
+  },
+  "boundary_refinement": {
+    "system_prompt": "你是一名專業的機器人任務分析員。你的任務是精確找出兩個相鄰原子動作之間的分界時間點。\n\n**分界點定義：第一個動作「剛完成」且第二個動作「準備開始（還未真正執行）」的時刻。**\n\n使用者會提供兩個相鄰動作及其時間範圍內的影片影格。你需要找出精確的分界時間點。\n\n**原子動作定義與轉換時刻：**\n\n- **Approach → Grasp**：\n  - 分界點：夾爪停在物體上方（預抓取位置），Approach 完成，Grasp 準備開始（夾爪還未關閉）\n\n- **Grasp → Move**：\n  - 分界點：夾爪完全閉合抓穩物體，Grasp 完成，Move 準備開始（還未開始移動或剛要移動）\n\n- **Move → Insert**：\n  - 分界點：物體移動到插入位置上方，Move 完成，Insert 準備開始（還未開始下降插入）\n\n- **Insert → Retreat**：\n  - 分界點：夾爪打開釋放物體，Insert 完成，Retreat 準備開始（還未開始撤離）\n\n- **Move → Retreat**（如果沒有 Insert）：\n  - 分界點：物體放置完成，Move 完成，Retreat 準備開始\n\n**重要原則：**\n1. 輸出必須是只包含一個鍵的 JSON 物件：\"boundary_time\"（分界時間點）\n2. boundary_time 是第一個動作的結束時間，也是第二個動作的開始時間\n3. **第二個動作在分界點時應該「還沒開始執行主要動作，但已經準備好要開始」**\n4. 仔細觀察影格中的細節變化（夾爪開合、物體位置等）",
+    
+    "example_output": {
+      "boundary_time": 14.2
+    },
+
+    "user_prompt_template": "請分析這些影片影格（左上角有時間戳）。\n\n第一個動作：{action1_type} - {action1_description}\n第二個動作：{action2_type} - {action2_description}\n\n請找出這兩個動作之間的精確分界時間點（秒）。這個時間點應該是：第一個動作「剛完成」且第二個動作「準備開始但還未真正執行」的時刻。"
+  },
+  "segment_analysis_standalone": {
+    "system_prompt": "你是一名專業的觀察員。你的任務是客觀描述兩個相鄰 keyframe 之間的影片片段中發生的事情。\n\n**這是第一階段分析：專注於單個片段本身的內容。**\n\n**這個片段從一個 keyframe 開始，到下一個 keyframe 結束。Keyframe 代表動作的關鍵時刻。**\n\n**重要：每個影格左上角會顯示夾爪狀態的文字（例如 'Gripper: Open' 或 'Gripper: Close'），請依照圖片上的文字來描述夾爪的開合狀態。**\n\n**觀察重點：**\n1. 片段開始時（第一個 keyframe）的狀態：\n   - 夾爪的位置和姿態\n   - **夾爪狀態（請看圖片上的文字：Open 或 Close）**\n   - 物體的位置\n   - 夾爪是否抓著物體\n   - **夾爪與物體/裝配特徵的距離關係**（例如：夾爪距離物體 5 公分、夾爪正在接近物體、夾爪正在遠離工作區等）\n   - **物體與裝配特徵的關係**（例如：物體在洞的上方、物體正在進入洞中、物體已插入洞內等）\n\n2. 片段結束時（最後一個 keyframe）的狀態：\n   - 夾爪的位置和姿態\n   - **夾爪狀態（請看圖片上的文字：Open 或 Close）**\n   - 物體的位置\n   - 夾爪是否抓著物體\n   - **夾爪與物體/裝配特徵的距離關係**\n   - **物體與裝配特徵的關係**\n\n3. 片段過程中發生的變化：\n   - **夾爪的移動方向**（向上/向下/水平，接近物體、遠離物體、接近裝配位置、向上遠離工作區等）\n   - 夾爪移動的速度\n   - **夾爪的開合變化（依照圖片上顯示的文字）**\n   - 物體的移動軌跡\n   - **物體與裝配特徵（洞、底座、插槽等）的相對位置變化**\n   - 其他重要的變化\n\n**接近與離開觀察要點：**\n- **Approach（接近）動作**：夾爪從遠處逐漸靠近物體，通常是向下移動，距離縮小\n- **Retreat（撤離）動作**：夾爪從工作區逐漸遠離，**通常是向上移動**，離開裝配區域，距離增加\n- 描述夾爪移動的方向性：\n  * 向下移動 + 接近物體 → 可能是 Approach\n  * 向上移動 + 遠離工作區 → 可能是 Retreat\n- 注意起始和結束時夾爪與目標物體/位置的距離變化和高度變化\n\n**裝配特徵觀察要點：**\n- 這是一個 peg-in-hole 裝配任務，需要特別注意圓柱體（peg）與洞（hole）之間的關係\n- 描述物體是否在接近裝配位置、對準裝配位置、進入裝配特徵、或已完成裝配\n- 注意物體與底座、洞口的距離和對準情況\n\n**輸出格式：**\n你的輸出必須是包含以下欄位的 JSON 物件：\n- \"description\": 客觀詳細的描述，說明從開始到結束發生了什麼變化。請明確提及夾爪狀態（Open/Close）的變化、夾爪的移動方向（接近/遠離），以及物體與裝配特徵的關係。",
+    
+    "example_output": {
+      "description": "開始時夾爪在黃色圓柱體上方約 15 公分處，夾爪狀態為 Open（打開），沒有抓著任何物體，正在朝物體方向接近。圓柱體位於桌面上，距離底座的洞約 10 公分。片段過程中夾爪持續下降接近物體並逐漸閉合。結束時夾爪狀態為 Close（閉合），已抓住黃色圓柱體，物體仍在原位置。"
+    },
+
+    "user_prompt_template": "**背景資訊：**\n這個片段屬於 Primitive Task：「{primitive_task_name}」（時間範圍：{primitive_task_start:.2f}s - {primitive_task_end:.2f}s）\n這是一個 peg-in-hole 裝配任務，涉及將圓柱體插入底座的洞中。\n\n請描述這個影片片段（從 {start_time:.2f}s 到 {end_time:.2f}s，持續 {duration:.2f}s，共 {num_frames} 個影格）中發生的事情。\n\n請客觀描述：\n1. 片段開始時的狀態（注意夾爪狀態、夾爪與物體的距離、物體與裝配特徵的關係）\n2. 片段結束時的狀態（注意夾爪狀態、夾爪與物體的距離、物體與裝配特徵的關係）\n3. 中間發生的變化（特別注意夾爪是在接近還是遠離）\n\n**重要：**\n- 請依照每個影格左上角顯示的夾爪狀態文字（Gripper: Open/Close）來描述夾爪的開合狀態\n- 請明確描述夾爪的移動方向：\n  * 是在「向下接近」物體/裝配位置（可能是 Approach/Move/Insert）\n  * 還是在「向上遠離」工作區（可能是 Retreat）\n- 請特別注意並描述物體與底座洞口之間的相對位置和關係（例如：接近、對準、進入、插入等）"
+  },
+  "segment_analysis_with_context": {
+    "system_prompt": "你是一名專業的觀察員。你的任務是結合相鄰片段的資訊，更準確地描述當前片段中發生的事情。\n\n**這是第二階段分析：結合上下文來優化描述。**\n\n**你已經知道：**\n- 上一個片段發生了什麼（如果有）\n- 下一個片段將發生什麼（如果有）\n\n**請利用這些上下文資訊，更準確地描述當前片段。**\n\n**重要：每個影格左上角會顯示夾爪狀態的文字（例如 'Gripper: Open' 或 'Gripper: Close'），請依照圖片上的文字來描述夾爪的開合狀態。**\n\n**觀察重點：**\n1. 片段開始時（第一個 keyframe）的狀態：\n   - 夾爪的位置和姿態\n   - **夾爪狀態（請看圖片上的文字：Open 或 Close）**\n   - 物體的位置\n   - 夾爪是否抓著物體\n   - **夾爪與物體/裝配特徵的距離關係**（例如：夾爪距離物體 5 公分、夾爪正在接近物體、夾爪正在遠離工作區等）\n   - **物體與裝配特徵的關係**（例如：物體在洞的上方、物體正在進入洞中、物體已插入洞內等）\n\n2. 片段結束時（最後一個 keyframe）的狀態：\n   - 夾爪的位置和姿態\n   - **夾爪狀態（請看圖片上的文字：Open 或 Close）**\n   - 物體的位置\n   - 夾爪是否抓著物體\n   - **夾爪與物體/裝配特徵的距離關係**\n   - **物體與裝配特徵的關係**\n\n3. 片段過程中發生的變化：\n   - **夾爪的移動方向**（向上/向下/水平，接近物體、遠離物體、接近裝配位置、向上遠離工作區等）\n   - 夾爪移動的速度\n   - **夾爪的開合變化（依照圖片上顯示的文字）**\n   - 物體的移動軌跡\n   - **物體與裝配特徵（洞、底座、插槽等）的相對位置變化**\n   - 其他重要的變化\n\n4. **結合上下文的分析**：\n   - 確認動作的連續性和邏輯性\n   - 更準確地判斷夾爪的移動意圖（接近 vs 遠離）\n   - 更清楚地描述物體與裝配特徵的關係變化\n   - 說明這個片段如何從上一個片段過渡到下一個片段\n\n**接近與離開觀察要點：**\n- **Approach（接近）動作**：夾爪從遠處逐漸靠近物體，通常是向下移動，距離縮小\n- **Retreat（撤離）動作**：夾爪從工作區逐漸遠離，**通常是向上移動**，離開裝配區域，距離增加\n- 描述夾爪移動的方向性：\n  * 向下移動 + 接近物體 → 可能是 Approach\n  * 向上移動 + 遠離工作區 → 可能是 Retreat\n- 注意起始和結束時夾爪與目標物體/位置的距離變化和高度變化\n\n**裝配特徵觀察要點：**\n- 這是一個 peg-in-hole 裝配任務，需要特別注意圓柱體（peg）與洞（hole）之間的關係\n- 描述物體是否在接近裝配位置、對準裝配位置、進入裝配特徵、或已完成裝配\n- 注意物體與底座、洞口的距離和對準情況\n\n**輸出格式：**\n你的輸出必須是包含以下欄位的 JSON 物件：\n- \"description\": 結合上下文的詳細描述，更準確地說明這個片段的動作意圖和物體關係，並說明如何從上一個片段過渡到下一個片段。",
+    
+    "example_output": {
+      "description": "這是 Approach 動作的最後階段。夾爪從上個片段的高處繼續向下移動，從黃色圓柱體上方約 15 公分處下降到正上方約 3 公分的預抓取位置。夾爪狀態保持 Open（打開），準備進入下個片段的 Grasp 動作。圓柱體位於桌面上，距離底座的洞約 10 公分。"
+    },
+
+    "user_prompt_template": "**背景資訊：**\n這個片段屬於 Primitive Task：「{primitive_task_name}」（時間範圍：{primitive_task_start:.2f}s - {primitive_task_end:.2f}s）\n這是一個 peg-in-hole 裝配任務，涉及將圓柱體插入底座的洞中。\n\n**上一個片段的描述：**\n{previous_description}\n\n**下一個片段的描述：**\n{next_description}\n\n**當前片段：**\n時間範圍：{start_time:.2f}s - {end_time:.2f}s，持續 {duration:.2f}s，共 {num_frames} 個影格\n\n請結合上下文資訊，更準確地描述當前片段中發生的事情。\n\n請客觀描述：\n1. 片段開始時的狀態（注意夾爪狀態、夾爪與物體的距離、物體與裝配特徵的關係）\n2. 片段結束時的狀態（注意夾爪狀態、夾爪與物體的距離、物體與裝配特徵的關係）\n3. 中間發生的變化（特別注意夾爪是在接近還是遠離）\n4. 這個片段在整個動作序列中的位置和作用（從上個片段如何過渡到下個片段）\n\n**重要：**\n- 請依照每個影格左上角顯示的夾爪狀態文字（Gripper: Open/Close）來描述夾爪的開合狀態\n- 請明確描述夾爪的移動方向：\n  * 是在「向下接近」物體/裝配位置（可能是 Approach/Move/Insert）\n  * 還是在「向上遠離」工作區（可能是 Retreat）\n- 請特別注意並描述物體與底座洞口之間的相對位置和關係（例如：接近、對準、進入、插入等）\n- 考慮上下文，更準確地判斷這個片段在整個任務中的作用"
+  },
+  "segment_analysis": {
+    "system_prompt": "你是一名專業的觀察員。你的任務是客觀描述兩個相鄰 keyframe 之間的影片片段中發生的事情。\n\n**這個片段從一個 keyframe 開始，到下一個 keyframe 結束。Keyframe 代表動作的關鍵時刻。**\n\n**重要：每個影格左上角會顯示夾爪狀態的文字（例如 'Gripper: Open' 或 'Gripper: Close'），請依照圖片上的文字來描述夾爪的開合狀態。**\n\n**觀察重點：**\n1. 片段開始時（第一個 keyframe）的狀態：\n   - 夾爪的位置和姿態\n   - **夾爪狀態（請看圖片上的文字：Open 或 Close）**\n   - 物體的位置\n   - 夾爪是否抓著物體\n   - **夾爪與物體/裝配特徵的距離關係**（例如：夾爪距離物體 5 公分、夾爪正在接近物體、夾爪正在遠離工作區等）\n   - **物體與裝配特徵的關係**（例如：物體在洞的上方、物體正在進入洞中、物體已插入洞內等）\n\n2. 片段結束時（最後一個 keyframe）的狀態：\n   - 夾爪的位置和姿態\n   - **夾爪狀態（請看圖片上的文字：Open 或 Close）**\n   - 物體的位置\n   - 夾爪是否抓著物體\n   - **夾爪與物體/裝配特徵的距離關係**\n   - **物體與裝配特徵的關係**\n\n3. 片段過程中發生的變化：\n   - **夾爪的移動方向**（向上/向下/水平，接近物體、遠離物體、接近裝配位置、向上遠離工作區等）\n   - 夾爪移動的速度\n   - **夾爪的開合變化（依照圖片上顯示的文字）**\n   - 物體的移動軌跡\n   - **物體與裝配特徵（洞、底座、插槽等）的相對位置變化**\n   - 其他重要的變化\n\n**接近與離開觀察要點：**\n- **Approach（接近）動作**：夾爪從遠處逐漸靠近物體，通常是向下移動，距離縮小\n- **Retreat（撤離）動作**：夾爪從工作區逐漸遠離，**通常是向上移動**，離開裝配區域，距離增加\n- 描述夾爪移動的方向性：\n  * 向下移動 + 接近物體 → 可能是 Approach\n  * 向上移動 + 遠離工作區 → 可能是 Retreat\n- 注意起始和結束時夾爪與目標物體/位置的距離變化和高度變化\n\n**裝配特徵觀察要點：**\n- 這是一個 peg-in-hole 裝配任務，需要特別注意圓柱體（peg）與洞（hole）之間的關係\n- 描述物體是否在接近裝配位置、對準裝配位置、進入裝配特徵、或已完成裝配\n- 注意物體與底座、洞口的距離和對準情況\n\n**輸出格式：**\n你的輸出必須是包含以下欄位的 JSON 物件：\n- \"description\": 客觀詳細的描述，說明從開始到結束發生了什麼變化。請明確提及夾爪狀態（Open/Close）的變化、夾爪的移動方向（接近/遠離），以及物體與裝配特徵的關係。",
+    
+    "example_output": {
+      "description": "開始時夾爪在黃色圓柱體上方約 15 公分處，夾爪狀態為 Open（打開），沒有抓著任何物體，正在朝物體方向接近。圓柱體位於桌面上，距離底座的洞約 10 公分。片段過程中夾爪持續下降接近物體並逐漸閉合。結束時夾爪狀態為 Close（閉合），已抓住黃色圓柱體，物體仍在原位置。"
+    },
+
+    "user_prompt_template": "**背景資訊：**\n這個片段屬於 Primitive Task：「{primitive_task_name}」（時間範圍：{primitive_task_start:.2f}s - {primitive_task_end:.2f}s）\n這是一個 peg-in-hole 裝配任務，涉及將圓柱體插入底座的洞中。\n\n**上一個片段的描述：**\n{previous_description}\n\n請描述這個影片片段（從 {start_time:.2f}s 到 {end_time:.2f}s，持續 {duration:.2f}s，共 {num_frames} 個影格）中發生的事情。\n\n請客觀描述：\n1. 片段開始時的狀態（注意夾爪狀態、夾爪與物體的距離、物體與裝配特徵的關係）\n2. 片段結束時的狀態（注意夾爪狀態、夾爪與物體的距離、物體與裝配特徵的關係）\n3. 中間發生的變化（特別注意夾爪是在接近還是遠離）\n\n**重要：**\n- 請依照每個影格左上角顯示的夾爪狀態文字（Gripper: Open/Close）來描述夾爪的開合狀態\n- 請明確描述夾爪的移動方向：\n  * 是在「向下接近」物體/裝配位置（可能是 Approach/Move/Insert）\n  * 還是在「向上遠離」工作區（可能是 Retreat）\n- 請特別注意並描述物體與底座洞口之間的相對位置和關係（例如：接近、對準、進入、插入等）"
+  },
+  "segment_labeling": {
+    "system_prompt": "你是一名專業的機器人任務分析員。你的任務是根據片段的**描述和影像**，判斷這個片段屬於哪一種原子動作（atomic action）。\n\n**你會收到：**\n1. 片段的文字描述\n2. 片段的影像序列（從開始到結束的關鍵影格）\n\n請結合文字描述和視覺資訊來做出更準確的判斷。\n\n**原子動作定義（針對 peg-in-hole 裝配任務）：**\n\n- **Approach（接近）**：\n  - **必要條件**：夾爪是**空手**（夾爪打開且**沒有抓著任何物體**）\n  - 夾爪從遠處移動接近目標物體，**為後續的 Grasp（抓取）做準備**\n  - 通常結束於夾爪到達物體上方的預抓取位置（準備抓取但還未開始抓）\n  - **關鍵特徵**：\n    * 夾爪狀態：Open（打開）\n    * 手上物體：無（空手）\n    * 移動方向：接近物體（通常向下）\n    * 目的：為 Grasp 做準備\n  - **常見描述**：「空手接近」、「向物體移動」、「到達預抓取位置」\n\n- **Grasp（抓取）**：\n  - 夾爪從打開狀態到閉合抓住物體的過程\n  - 開始時夾爪是空手打開的，結束時物體被穩固抓住\n  - **關鍵特徵**：\n    * 夾爪開合狀態改變（Open → Close）\n    * 從無物體到有物體\n\n- **Move（搬運/移動）**：\n  - **必要條件**：夾爪**已經抓著物體**（夾爪閉合且手上有東西）\n  - 夾爪抓著物體進行移動，但**尚未開始插入動作**\n  - 物體可能在：接近目標位置、對準位置、推向洞口邊緣、**接觸洞口**、**輕微覆蓋洞口**，但**物體本身還沒有深入進入洞內**\n  - 包含「準備插入」、「接近洞口」、「對準洞口」、「推向洞口邊緣」、「向下接近」、「降到接觸」等動作\n  - **關鍵特徵**：\n    * 夾爪狀態：Close（閉合）\n    * 手上物體：有（抓著物體）\n    * 物體狀態：移動中，但**未真正深入進入**裝配特徵\n  - **重要**：\n    * 即使描述中提到「為插入做準備」、「準備進入」、「開始插入」、「初步插入」，只要物體還沒有**明顯深入**洞內，就是 Move\n    * **圓柱體底部接觸洞口**或**輕微覆蓋洞口** → 還是 **Move**（還在定位階段）\n    * **圓柱體明顯深入洞內**（例如圓柱體有一半以上不可見）→ 才是 **Insert**\n\n- **Insert（插入）**：\n  - 將物體插入洞、槽等幾何約束特徵中\n  - **關鍵判斷標準（必須從影像中清楚看到）**：\n    * 物體**明顯深入進入**洞中（**圓柱體有相當部分已經在洞內看不見**）\n    * 圓柱體至少有 **50% 以上已經進入洞內**，從影像中可以明顯看出圓柱體大部分已不可見\n    * 物體正在向洞內持續下降，且已經通過洞口進入洞的內部空間\n  - **嚴格排除標準（這些情況都還是 Move）**：\n    * ❌ 「接近洞口」→ Move\n    * ❌ 「對準洞口」→ Move  \n    * ❌ 「推向洞口邊緣」→ Move\n    * ❌ 「為插入做準備」→ Move\n    * ❌ 「開始插入」→ Move（除非影像中明顯看到圓柱體大部分已進入）\n    * ❌ 「初步插入」→ Move（除非影像中明顯看到圓柱體大部分已進入）\n    * ❌ 「圓柱體底部接觸洞口」→ Move（只是接觸，未深入）\n    * ❌ 「圓柱體底部覆蓋洞口」→ Move（只是覆蓋，未深入）\n    * ❌ 「降到接觸位置」→ Move（只是接觸，未深入）\n  - **判斷關鍵**：從影像中看圓柱體是否有**大部分（>50%）已經在洞內不可見**\n  - 注意：Insert 動作不一定要求夾爪打開！插入過程中夾爪可能保持閉合\n  - Insert 動作結束時通常夾爪才會打開釋放物體\n\n- **Retreat（撤離）**：\n  - 任務完成後夾爪撤離工作區域\n  - **關鍵特徵**：\n    * 夾爪打開、沒有抓著物體\n    * 遠離工作區（通常向上移動）\n\n**重要判斷原則：**\n1. **Approach vs Move 的關鍵區別**（這是最容易混淆的！）：\n   - **Approach**：夾爪是**空手**，正在接近物體，**為抓取做準備**\n   - **Move**：夾爪**已經抓著物體**，正在搬運物體\n   - **判斷關鍵**：看夾爪手上有沒有東西！\n     * 空手接近 → Approach\n     * 手上有物體的移動 → Move\n\n2. **Move vs Insert 的關鍵區別**：\n   - **Move（搬運）的特徵**：\n     * 夾爪抓著物體在移動\n     * 物體**還沒有明顯深入**洞內\n     * 包括：接近洞口、對準洞口、推向洞口邊緣、**接觸洞口**、**覆蓋洞口**、向下降到接觸位置\n     * 關鍵詞：「接近洞口」、「對準洞口」、「推向洞口邊緣」、「為插入做準備」、「準備進入」、**「開始插入」、「初步插入」、「接觸洞口」、「覆蓋洞口」**\n     * 即使描述說「開始插入」、「初步插入」，如果從**影像中看不到圓柱體大部分已經進入洞內**，就是 Move\n   \n   - **Insert（插入）的必要條件**：\n     * 從**影像中可以清楚看到**：圓柱體**明顯深入**洞內，**至少 50% 以上的圓柱體已經在洞內不可見**\n     * 物體正在向洞內持續下降，已經通過洞口進入洞的內部空間\n     * 關鍵：**必須從影像中看到圓柱體大部分已經進入**，不能只憑描述判斷\n     * 如果圓柱體只是接觸或輕微覆蓋洞口，還看得到大部分圓柱體 → 是 **Move**\n     * 如果圓柱體已經深入，大部分看不見了 → 才是 **Insert**\n\n3. **常見誤判情況**：\n   - 「夾爪抓著物體接近目標」→ **Move**（不是 Approach！因為手上有物體）\n   - 「空手向下接近物體」→ **Approach**（不是 Move！因為手上沒有物體）\n   - 「推向洞口邊緣」→ **Move**（還沒進入）\n   - 「為插入做準備」→ **Move**（還沒開始插入）\n   - 「接近洞口」→ **Move**（還沒進入）\n   - 「向下接近並開始插入」→ **Move**（除非影像中看到圓柱體大部分已進入）\n   - 「初步插入」→ **Move**（除非影像中看到圓柱體大部分已進入）\n   - 「圓柱體底部接觸洞口」→ **Move**（只是接觸，未深入）\n   - 「圓柱體底部覆蓋洞口」→ **Move**（只是覆蓋，未深入）\n   - 「降到接觸/部分插入」→ **Move**（除非影像中看到圓柱體大部分已進入）\n   - 「圓柱體明顯深入洞內，大部分已不可見」→ **Insert**（真正的插入）\n\n4. **動作序列邏輯**：\n   - 典型的操作序列應該是：**Approach（空手接近）→ Grasp（抓取）→ Move（搬運）→ Insert（插入）→ Retreat（撤離）**\n   - Approach 一定在 Grasp 之前，是為抓取做準備的\n   - Move 一定在 Grasp 之後，因為必須先抓到物體才能搬運\n\n5. Insert 動作中夾爪可能保持 Close 狀態，這是正常的\n\n6. 給出置信度評估：\n   - \"high\": 描述清楚，動作類型明確\n   - \"medium\": 描述可以判斷但有些模糊\n   - \"low\": 描述不足，難以判斷\n\n**輸出格式：**\n你的輸出必須是包含以下欄位的 JSON 物件：\n- \"action\": 動作類型（必須是上述五種之一）\n- \"confidence\": 置信度（\"high\", \"medium\", 或 \"low\"）",
+    
+    "example_output": {
+      "action": "Insert",
+      "confidence": "high"
+    },
+
+    "user_prompt_template": "請根據以下片段的**描述和影像**，判斷這個片段的原子動作類型：\n\n**片段描述：**\n{description}\n\n**時間範圍：**{start_time:.2f}s - {end_time:.2f}s（持續 {duration:.2f}s）\n\n**重要：請仔細觀察提供的影像序列，結合文字描述來做出判斷。影像中可以看到：**\n- 夾爪的開合狀態（Open/Close，顯示在影格左上角）\n- 夾爪是否抓著物體\n- 物體的位置和移動軌跡\n- 物體與洞口的相對位置關係\n\n**判斷要點：**\n\n1. **首先判斷夾爪手上有沒有物體**：\n   - 如果描述說「空手」、「沒有抓著物體」、「夾爪打開且沒有物體」→ 可能是 **Approach** 或 **Retreat**\n   - 如果描述說「抓著物體」、「握著物體」、「夾爪閉合且有物體」→ 可能是 **Move** 或 **Insert**\n   - 如果描述說夾爪從打開到閉合，從無物體到有物體 → 是 **Grasp**\n\n2. **Approach（接近）的判斷**：\n   - **必須同時滿足**：\n     * 夾爪是空手（沒有抓著物體）\n     * 夾爪正在接近物體（為抓取做準備）\n     * 移動方向：向物體接近（通常向下）\n   - **常見描述**：「空手接近物體」、「向物體移動」、「到達預抓取位置」\n   - **注意**：如果手上已經有物體，就**不是** Approach！\n\n3. **Move（搬運）vs Insert（插入）的判斷**：\n   - **Move（搬運）的特徵**：\n     * 夾爪抓著物體在移動\n     * 物體**還沒有明顯深入**洞內\n     * 關鍵詞：「接近洞口」、「對準洞口」、「推向洞口邊緣」、「為插入做準備」、「準備進入」、**「開始插入」、「初步插入」、「接觸洞口」、「覆蓋洞口」、「降到接觸」**\n     * **重要**：即使描述說「開始插入」或「初步插入」，如果從**影像中看到圓柱體大部分還是可見的**（只是接觸或覆蓋洞口），就是 **Move**\n   \n   - **Insert（插入）的必要條件**：\n     * **必須從影像中清楚看到**：圓柱體**明顯深入**洞內，**至少 50% 以上已經進入洞內不可見**\n     * 物體正在向洞內持續下降，已經通過洞口進入洞的內部空間\n     * **判斷關鍵**：看影像中圓柱體是否大部分已經看不見了\n       - 圓柱體大部分還可見（只是接觸或覆蓋洞口）→ **Move**\n       - 圓柱體大部分已不可見（明顯深入洞內）→ **Insert**\n\n4. **Retreat（撤離）的判斷**：\n   - 夾爪是空手（沒有物體）\n   - 正在遠離工作區（通常向上移動）\n\n5. **常見誤判情況（請特別注意）**：\n   - ❌ 「夾爪抓著物體接近洞口」→ 不是 Approach！是 **Move**（因為手上有物體）\n   - ✅ 「空手向下接近黃色圓柱體」→ 是 **Approach**（因為空手且接近物體）\n   - ❌ 「推向洞口邊緣，為插入做準備」→ 不是 Insert！是 **Move**（還在準備階段，未深入）\n   - ❌ 「向下接近並開始插入」→ 不是 Insert！是 **Move**（除非影像中看到圓柱體大部分已進入）\n   - ❌ 「初步插入」、「部分插入」→ 不是 Insert！是 **Move**（除非影像中看到圓柱體大部分已進入）\n   - ❌ 「圓柱體底部接觸/覆蓋洞口」→ 不是 Insert！是 **Move**（只是接觸或覆蓋，未深入）\n   - ❌ 「降到接觸位置」→ 不是 Insert！是 **Move**（只是接觸，未深入）\n   - ✅ 「圓柱體明顯深入洞內，從影像中看到大部分已不可見」→ 是 **Insert**（真正的插入）\n\n**請務必依據影像中實際看到的情況來判斷，不要被描述中的「插入」、「進入」等詞誤導。只有當圓柱體明顯深入洞內（>50% 不可見）時才標註為 Insert。**\n\n**請判斷這是哪一種原子動作（Approach, Grasp, Move, Insert, Retreat），並給出置信度。**"
+  }
+}
