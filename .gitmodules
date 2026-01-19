@@ -1,3 +1,6 @@
 [submodule "ros2_ws/src/realsense-ros"]
 	path = ros2_ws/src/realsense-ros
 	url = https://github.com/realsenseai/realsense-ros.git
+[submodule "tmdriver_ws/src/tmr_ros2"]
+	path = tmdriver_ws/src/tmr_ros2
+	url = https://github.com/TechmanRobotInc/tmr_ros2.git
