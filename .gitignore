@@ -13,3 +13,5 @@ __pycache__
 *.pts
 *.pt
 ros2_ws/src/ipc_test/peg_30.pts
+.vscode/
+.DS_Store
