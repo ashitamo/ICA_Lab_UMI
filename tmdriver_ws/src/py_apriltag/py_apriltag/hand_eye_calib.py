@@ -77,7 +77,7 @@ class HandEyeCalib(Node):
         self.queue = queue.Queue(maxsize=2)
         self._sub = self.create_subscription(
             Image,
-            '/camera/color/image_raw',
+            '/camera/color/image_rect_raw',
             self.readCam,
             10
         )

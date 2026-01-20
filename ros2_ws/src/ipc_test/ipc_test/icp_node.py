@@ -21,8 +21,8 @@ class ICPNode(Node):
         self.cam_queue = queue.Queue(2)
         self.cam_info_queue = queue.Queue(1)
 
-        self.color_img_sub = Subscriber(self, Image, '/camera/color/image_raw')
-        self.depth_img_sub = Subscriber(self, Image, '/camera/aligned_depth_to_color/image_raw')
+        self.color_img_sub = Subscriber(self, Image, '/camera/color/image_rect_raw')
+        self.depth_img_sub = Subscriber(self, Image, '/camera/depth/image_rect_raw')
         self.points_sub = Subscriber(self, PointCloud2, '/camera/depth/color/points')
 
         self.cam_info_sub = self.create_subscription(
@@ -145,7 +145,7 @@ def main():
 
     if data is not None:
         color_img, depth_img, point_cloud = data
-        tgt = load_pts_xyz("peg_30.pts")
+        tgt = mesh_to_pcd("peg_30.5mm - Part 1.stl")
         T, bbox, result_icp = get_bbox_by_icp(color_img, point_cloud, intr, tgt, viz=True)
     else:
         print("No data received.")

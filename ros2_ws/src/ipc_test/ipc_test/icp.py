@@ -3,6 +3,12 @@ import numpy as np
 import open3d as o3d
 from scipy.spatial.transform import Rotation
 
+def mesh_to_pcd(mesh: o3d.geometry.TriangleMesh | str) -> o3d.geometry.PointCloud:
+    if isinstance(mesh, str):
+        mesh = o3d.io.read_triangle_mesh(mesh)
+    pointcloud = mesh.sample_points_poisson_disk(100000)
+    return pointcloud
+
 def load_pts_xyz(path: str) -> o3d.geometry.PointCloud:
     pts = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:

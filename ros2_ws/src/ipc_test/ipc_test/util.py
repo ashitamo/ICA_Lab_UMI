@@ -6,6 +6,7 @@ from openai import OpenAI
 import re 
 import open3d as o3d
 
+
 def _img_bgr_to_png_bytes(img_bgr: np.ndarray) -> bytes:
     """把 BGR 圖存成 PNG bytes。"""
     ok, buf = cv2.imencode(".png", img_bgr)
@@ -18,20 +19,7 @@ def _png_bytes_to_data_uri(png_bytes: bytes) -> str:
     b64 = base64.b64encode(png_bytes).decode("utf-8")
     return f"data:image/png;base64,{b64}"
 
-def get_cylinder_mask(
-    demo_img_color_list: List[np.ndarray],
-    field_img_color: np.ndarray,
-) -> Optional[np.ndarray]:
-    """
-    輸入:
-      1) demo BGR 圖 list（numpy ndarray, uint8）
-      2) field BGR 圖（numpy ndarray, uint8）
-      3) field 深度圖（numpy ndarray, uint16）  # 目前此版本不使用
-      4) field 內參                             # 目前此版本不使用
-    回傳：
-      target_mask (H,W) -> uint8 binary mask，前景=255, 背景=0；或 None
-    """
-
+def generate_masks(field_img_color: np.ndarray):
     # ===== SAM2 config =====
     POINTS_PER_SIDE        = 32
     PRED_IOU_THRESH        = 0.7
@@ -51,8 +39,7 @@ def get_cylinder_mask(
 
     field_rgb = cv2.cvtColor(field_img_color, cv2.COLOR_BGR2RGB)
     field_masks = mask_generator.generate(field_rgb)
-
-    processed_field_img = field_rgb.copy()
+    field_img_mask_center = field_rgb.copy()
 
     # 算中心點（用來畫 ID）
     def _mask_center(mask_item):
@@ -67,6 +54,25 @@ def get_cylinder_mask(
             return (M["m10"] / M["m00"], M["m01"] / M["m00"])
         ys, xs = np.where(binmask > 0)
         return (float(xs.mean()), float(ys.mean())) if len(xs) else None
+    
+    def _apply_colored_masks(img_bgr: np.ndarray, masks: list, alpha: float = 0.5, seed: int = 42) -> np.ndarray:
+        """對圖片套用彩色遮罩。"""
+        processed = img_bgr.copy()
+        h, w = processed.shape[:2]
+        rng = np.random.default_rng(seed)
+        
+        for item in masks:
+            m = item["segmentation"].astype(np.uint8)
+            if m.ndim == 3:
+                m = m[..., 0]
+            if m.sum() == 0:
+                continue
+            
+            color = rng.integers(0, 255, size=3, dtype=np.uint8)
+            color_mask = np.zeros((h, w, 3), dtype=np.uint8)
+            color_mask[m > 0] = color
+            processed = cv2.addWeighted(processed, 1.0, color_mask, alpha, 0)
+        return processed
 
     # 畫所有中心 + ID（ID = field_masks 的 idx）
     for idx, item in enumerate(field_masks):
@@ -74,13 +80,23 @@ def get_cylinder_mask(
         if cxcy is None:
             continue
         cx, cy = cxcy
-        cv2.circle(processed_field_img, (int(cx), int(cy)), 4, (0, 0, 0), -1)
-        cv2.circle(processed_field_img, (int(cx), int(cy)), 3, (255, 255, 255), -1)
-        cv2.putText(processed_field_img, str(idx), (int(cx) + 6, int(cy) - 6),
+        cv2.circle(field_img_mask_center, (int(cx), int(cy)), 4, (0, 0, 0), -1)
+        cv2.circle(field_img_mask_center, (int(cx), int(cy)), 3, (255, 255, 255), -1)
+        cv2.putText(field_img_mask_center, str(idx), (int(cx) + 6, int(cy) - 6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(processed_field_img, str(idx), (int(cx) + 6, int(cy) - 6),
+        cv2.putText(field_img_mask_center, str(idx), (int(cx) + 6, int(cy) - 6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+    field_img_colored_mask = _apply_colored_masks(field_img_mask_center.copy(), field_masks)
+    field_img_mask_center = field_img_mask_center.copy()
 
+    return field_img_mask_center, field_img_colored_mask, field_masks
+    
+def get_hole_mask(
+    demo_img_color_list: List[np.ndarray],
+    field_img_color: np.ndarray,
+    processed_field_img: np.ndarray,
+    field_masks: List[Dict[str, Any]],
+) -> Optional[np.ndarray]:
     target_id: Optional[int] = None
     target_mask: Optional[np.ndarray] = None
 
@@ -120,6 +136,141 @@ def get_cylinder_mask(
     cv2.waitKey(1000)
 
     return target_mask
+
+def get_cylinder_mask(
+    demo_img_color_list: List[np.ndarray],
+    field_img_color: np.ndarray,
+    processed_field_img: np.ndarray,
+    field_masks: List[Dict[str, Any]],
+) -> Optional[np.ndarray]:
+    """
+    輸入:
+      1) demo BGR 圖 list（numpy ndarray, uint8）
+      2) field BGR 圖（numpy ndarray, uint8）
+      3) processed field BGR 圖（numpy ndarray, uint8）
+      4) field segmentation masks（list of dict）
+    回傳：
+      target_mask (H,W) -> uint8 binary mask，前景=255, 背景=0；或 None
+    """
+    target_id: Optional[int] = None
+    target_mask: Optional[np.ndarray] = None
+
+    use_vlm = bool(os.environ.get("OPENAI_API_KEY"))
+    if not use_vlm:
+        print("[VLM skip] OPENAI_API_KEY not set; skip VLM logic")
+    else:
+        try:
+            # 第一次：讀出所有 cylinder IDs（你原本的函式）
+            cylinder_ids = ask_vlm_field_cylinder_ids(processed_field_img, model="gpt-4.1", temperature=0.0)
+            print("[Debug] All cylinder_ids(B) =", cylinder_ids)
+
+            # 第二次：從 DEMO 圖判斷要夾哪一個
+            target_cyl_id = ask_vlm_field_target_cylinder_from_demo(
+                demo_img_color_list, processed_field_img, cylinder_ids, model="gpt-4.1", temperature=0.0
+            )
+            print("[Debug] target_cylinder_id =", target_cyl_id)
+
+            if target_cyl_id is not None:
+                target_id = int(target_cyl_id)
+
+        except Exception as e:
+            print("[VLM warn][grasp] cylinder-id reading failed:", e)
+
+    # 依 target_id 取回對應 segmentation mask
+    if target_id is not None and 0 <= target_id < len(field_masks):
+        m = field_masks[target_id]["segmentation"]
+        m = m.astype(np.uint8)
+        if m.ndim == 3:
+            m = m[..., 0]
+        target_mask = (m > 0).astype(np.uint8) * 255
+    else:
+        if target_id is not None:
+            print(f"[Warn] target_id={target_id} out of range (0~{len(field_masks)-1})")
+
+    cv2.imshow("Processed Field Image", processed_field_img)
+    cv2.waitKey(1000)
+
+    return target_mask
+
+def ask_vlm_field_target_hole_id(
+    field_img_with_ids_bgr: np.ndarray,
+    model: str = "gpt-4.1",
+    temperature: float = 0.0,
+) -> Optional[int]:
+    """
+    
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set")
+    client = OpenAI(api_key=api_key)
+
+    demo_uris = [
+        _png_bytes_to_data_uri(_img_bgr_to_png_bytes(img))
+        for img in demo_img_bgr_list
+    ]
+    field_uri = _png_bytes_to_data_uri(_img_bgr_to_png_bytes(field_img_with_ids_bgr))
+
+    system_prompt = (
+        "You are a careful vision assistant.\n"
+        "Image A (DEMO): You will receive multiple DEMO images (time sequence) showing a gripper moving toward a specific yellow/orange cylinder.\n"
+        "Image B (FIELD): You will also receive one FIELD image with all cylinders labeled by numeric IDs.\n"
+        f"The valid cylinder IDs are: {cylinder_ids}.\n"
+        "All cylinders are placed directly on a flat table.\n"
+        "\n"
+        "TASK:\n"
+        "- Focus only on the cylinder that the gripper is about to grasp in sequence Image A.\n"
+        "- Compare its relative position and color/shape with the labeled cylinders in Image B.\n"
+        "- Find the matching cylinder ID from Image B.\n"
+        "- If uncertain, select the cylinder whose relative position and appearance most closely match the one in Image A, "
+        "or the one located near the center of the image.\n"
+        "\n"
+        "STRICT OUTPUT FORMAT:\n"
+        "{\"target_cylinder_id\": <int>}\n"
+        "Return STRICT JSON ONLY. No extra words."
+    )
+
+    user_prompt = (
+        "These DEMO images show a gripper approaching a cylinder. "
+        "Use all frames together to infer which cylinder will be grasped, "
+        "then match it to the labeled FIELD image and return its ID."
+    )
+
+    message_content = [{"type": "text", "text": user_prompt}]
+    for uri in demo_uris:
+        message_content.append({"type": "image_url", "image_url": {"url": uri}})
+    message_content.append({"type": "image_url", "image_url": {"url": field_uri}})
+
+    resp = client.chat.completions.create(
+        model=model,
+        temperature=temperature,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message_content},
+        ],
+    )
+
+    text = resp.choices[0].message.content.strip()
+    try:
+        data = json.loads(text)
+    except Exception:
+        m = re.search(r"\{.*\}", text, flags=re.S)
+        if not m:
+            raise ValueError(f"VLM did not return valid JSON: {text}")
+        data = json.loads(m.group(0))
+
+    val = data.get("target_cylinder_id", None)
+    if val is None:
+        return None
+
+    try:
+        val = int(val)
+        if val not in cylinder_ids:
+            print(f"[VLM warn] target_cylinder_id {val} not in valid list {cylinder_ids}")
+            return None
+        return val
+    except Exception:
+        raise ValueError(f"target_cylinder_id is not an integer: {val}")
 
 def ask_vlm_field_cylinder_ids(
     field_img_with_ids_bgr: np.ndarray,

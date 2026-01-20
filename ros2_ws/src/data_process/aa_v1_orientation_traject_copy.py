@@ -60,7 +60,7 @@ class aa_publisher(Node):
         }
         self.get_logger().info("Executor Node Initialized. Ready to run mission.")
         
-        self.calib = {'color': {'fx': 434.5713806152344, 'fy': 433.9692077636719,
+        self.calib = {'color': {'fx': 434.57147216796875, 'fy': 433.9692077636719,
                                       'ppx': 422.2452392578125, 'ppy': 241.36700439453125, 
                                       'width': 848, 'height': 480, }
                     }

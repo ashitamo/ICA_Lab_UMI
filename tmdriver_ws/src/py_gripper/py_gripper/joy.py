@@ -43,6 +43,7 @@ class Joy(Node):
         listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         listener.start()
         self.grip = False
+        self.joy_pub = self.create_publisher(Float64MultiArray,'/joy',30)
         self.create_timer(0.1, self.run)
             
         

@@ -61,7 +61,7 @@ class Arm(Node):
         self.depth_queue = queue.Queue(1)
         self.points_queue = queue.Queue(1)
 
-        self.color_img_sub = self.create_subscription(Image, '/camera/color/image_raw', self.color_callback, qos_profile_sensor_data)
+        self.color_img_sub = self.create_subscription(Image, '/camera/color/image_rect_raw', self.color_callback, qos_profile_sensor_data)
         self.depth_img_sub = self.create_subscription(Image, '/camera/depth/image_rect_raw', self.depth_callback, qos_profile_sensor_data)
         self.points_sub = self.create_subscription(PointCloud2, '/camera/depth/color/points', self.points_callback, qos_profile_sensor_data)
         self.traj_state_pub = self.create_publisher(TrajState, '/traj_state', 10)
