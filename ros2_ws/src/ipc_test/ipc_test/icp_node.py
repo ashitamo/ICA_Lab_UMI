@@ -100,7 +100,7 @@ def get_bbox_by_icp(src, tgt ,viz=False , all_pcd=None) -> Tuple[np.ndarray, o3d
     tgt_down, tgt_fpfh = preprocess_point_cloud(tgt, voxel_size)
     print("[Debug] src_down points =", len(src_down.points))
     print("[Debug] tgt_down points =", len(tgt_down.points))
-    # 1) 粗配準：FPFH + RANSAC
+    # 1) 粗配準：FPFH + FGR
     # result_ransac = global_registration_ransac(src_down, tgt_down, src_fpfh, tgt_fpfh, voxel_size)
     result_fgr = fgr(src_down, tgt_down, src_fpfh, tgt_fpfh, voxel_size)
     print("[FGR] fitness:", result_fgr.fitness, "rmse:", result_fgr.inlier_rmse)
@@ -120,7 +120,7 @@ def get_bbox_by_icp(src, tgt ,viz=False , all_pcd=None) -> Tuple[np.ndarray, o3d
     # 你可以選 AABB 或 OBB
     bbox = tgt_aligned.get_minimal_oriented_bounding_box()  # OBB 比較貼物體
     hole_points = top_face_inset_corners_as_pcd(bbox)
-    peg_btn_point, rot = btn_face_center(bbox)
+    _,_, peg_btn_point, rot = top_and_bottom_face_centers(bbox)
     print("[ICP] time   :", time.time() - start)
     print("[ICP] fitness:", result_icp.fitness)
     print("[ICP] rmse   :", result_icp.inlier_rmse)
@@ -157,7 +157,10 @@ def get_bbox_by_icp(src, tgt ,viz=False , all_pcd=None) -> Tuple[np.ndarray, o3d
             geoms.append(all_pcd)
 
         o3d.visualization.draw_geometries(geoms)
-    return T, bbox ,result_icp
+    return T, bbox ,result_icp, hole_points , peg_btn_point
+
+peg_tgt = mesh_to_pcd("peg_30.5mm - Part 1.stl")
+hole_tgt = mesh_to_pcd("hole_assembly.stl")
 
 def main():
     iCPNode = startNode()
@@ -177,9 +180,9 @@ def main():
             field_img_mask_center,
             field_masks
         )
-        src = masked_pointcloud_from_o3d(point_cloud, mask, intr)
+        src = peg_tgt
         tgt = mesh_to_pcd("peg_30.5mm - Part 1.stl")
-        T, bbox, result_icp = get_bbox_by_icp(src, tgt, viz=True, all_pcd=point_cloud)
+        T, bbox, result_icp,_,_ = get_bbox_by_icp(src, tgt, viz=True, all_pcd=point_cloud)
 
         
         target_mask, target_id = get_platform_mask(field_img_mask_center, field_masks)
@@ -190,7 +193,7 @@ def main():
         cv2.waitKey(1000)
 
         src = masked_pointcloud_from_o3d(point_cloud, target_mask, intr)
-        tgt = mesh_to_pcd("hole_assembly.stl")
+        tgt = hole_tgt
         get_bbox_by_icp(src, tgt, viz=True, all_pcd=point_cloud)
 
         

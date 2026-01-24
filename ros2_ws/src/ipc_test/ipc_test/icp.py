@@ -202,63 +202,71 @@ def top_face_inset_corners_as_pcd(
     return pcd
 
 
-def btn_face_center(
+def top_and_bottom_face_centers(
     bbox: o3d.geometry.OrientedBoundingBox,
-) -> Tuple[o3d.geometry.PointCloud, np.ndarray]:
+) -> Tuple[
+    o3d.geometry.PointCloud, np.ndarray,   # top_pc, top_R
+    o3d.geometry.PointCloud, np.ndarray    # bottom_pc, bottom_R
+]:
     """
-    以「離原點最遠的那個面」作為底面。
+    找 OBB 六個面中心中：
+      - 離原點最近的面 = top
+      - 離原點最遠的面 = bottom
 
-    定義：
-    - OBB 有 3 個局部軸 a0,a1,a2（bbox.R 的 columns），以及 extents e0,e1,e2
-    - 每個軸有兩個面中心：c ± ai*(ei/2)
-    - 計算六個面中心到原點距離 ||center_face||，取最大者為底面
-    - 該面的法向量取 ±ai（朝盒子外側，亦即 face_center - bbox.center 的方向）
-
-    回傳：
-      - pc: 只含 1 點（底面中心點）
+    每個面都回傳：
+      - pc: 只含 1 點（面中心點）
       - R_face: 3x3 rotation，z 軸為該面的外側法向量，x/y 在面內（右手系）
     """
     c = np.asarray(bbox.center, dtype=np.float64)
-    Rm = np.asarray(bbox.R, dtype=np.float64)           # columns are local axes
-    ext = np.asarray(bbox.extent, dtype=np.float64)     # lengths along each axis
+    Rm = np.asarray(bbox.R, dtype=np.float64)       # columns are local axes
+    ext = np.asarray(bbox.extent, dtype=np.float64)
 
-    # 三個局部軸
     axes = [Rm[:, 0], Rm[:, 1], Rm[:, 2]]
 
-    best = None  # (dist, axis_index, sign, face_center)
+    # 收集 6 個面：(dist, axis_index, sign, face_center)
+    faces = []
     for i, a in enumerate(axes):
         half = 0.5 * float(ext[i])
         for s in (+1.0, -1.0):
             fc = c + s * a * half
-            d = np.linalg.norm(fc)  # 到原點距離
-            if best is None or d > best[0]:
-                best = (d, i, s, fc)
+            d = np.linalg.norm(fc)
+            faces.append((d, i, s, fc))
 
-    _, k_axis, sign, face_center = best
-    w = axes[k_axis]
+    # 最近=top，最遠=bottom
+    top = min(faces, key=lambda x: x[0])
+    bottom = max(faces, key=lambda x: x[0])
 
-    # 外側法向量：由中心指向該面（保證朝外）
-    z_axis = (face_center - c)
-    z_axis = z_axis / (np.linalg.norm(z_axis) + 1e-12)
+    def _face_pose(face_tuple):
+        _, k_axis, _, face_center = face_tuple
+        w = axes[k_axis]
 
-    # 面內兩軸：從另外兩個 bbox 軸挑兩根
-    idx = [0, 1, 2]
-    idx.remove(k_axis)
-    x_axis = axes[idx[0]]
-    y_axis = axes[idx[1]]
+        # 外側法向量：從 bbox.center 指向該面中心（一定朝外）
+        z_axis = face_center - c
+        z_axis = z_axis / (np.linalg.norm(z_axis) + 1e-12)
 
-    # 讓 x_axis 與 z_axis 正交，並建立右手系 y = z × x
-    x_axis = x_axis - z_axis * np.dot(x_axis, z_axis)
-    x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-12)
-    y_axis = np.cross(z_axis, x_axis)
-    y_axis = y_axis / (np.linalg.norm(y_axis) + 1e-12)
+        # 面內兩軸：取另外兩根 bbox 軸
+        idx = [0, 1, 2]
+        idx.remove(k_axis)
+        x_axis = axes[idx[0]]
+        y_axis = axes[idx[1]]
 
-    R_face = np.column_stack([x_axis, y_axis, z_axis])
+        # 正交化 + 右手系
+        x_axis = x_axis - z_axis * np.dot(x_axis, z_axis)
+        x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-12)
+        y_axis = np.cross(z_axis, x_axis)
+        y_axis = y_axis / (np.linalg.norm(y_axis) + 1e-12)
 
-    pc = o3d.geometry.PointCloud()
-    pc.points = o3d.utility.Vector3dVector([face_center])
+        R_face = np.column_stack([x_axis, y_axis, z_axis])
 
-    return pc, R_face
+        pc = o3d.geometry.PointCloud()
+        pc.points = o3d.utility.Vector3dVector([face_center])
+
+        return pc, R_face
+
+    top_pc, top_R = _face_pose(top)
+    bottom_pc, bottom_R = _face_pose(bottom)
+
+    return top_pc, top_R, bottom_pc, bottom_R
 
 if __name__ == "__main__":
     tgt = load_pts_xyz("peg_30.pts")   # 參考/完美點雲：target
