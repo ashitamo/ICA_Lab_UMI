@@ -89,27 +89,26 @@ def startNode():
     thread.start()
     return iCPNode
 
-def get_bbox_by_icp(color_img, point_cloud, intr, tgt ,viz=False) -> Tuple[np.ndarray, o3d.geometry.OrientedBoundingBox, o3d.pipelines.registration.RegistrationResult]:
-    
-    mask = get_cylinder_mask(
-        [],
-        color_img,
-    )
+def get_bbox_by_icp(src, tgt ,viz=False , all_pcd=None) -> Tuple[np.ndarray, o3d.geometry.OrientedBoundingBox, o3d.pipelines.registration.RegistrationResult]:
     start = time.time()
-    src = masked_pointcloud_from_o3d(point_cloud, mask, intr)
     extent = np.linalg.norm(np.asarray(tgt.get_max_bound()) - np.asarray(tgt.get_min_bound()))
     voxel_size = max(extent / 50.0, 1e-5)  # 視尺度可改 /30, /100
-
+    print("[Debug] voxel_size =", voxel_size)
+    print("[Debug] src points =", len(src.points))
+    T = np.eye(4)
     src_down, src_fpfh = preprocess_point_cloud(src, voxel_size)
     tgt_down, tgt_fpfh = preprocess_point_cloud(tgt, voxel_size)
-
+    print("[Debug] src_down points =", len(src_down.points))
+    print("[Debug] tgt_down points =", len(tgt_down.points))
     # 1) 粗配準：FPFH + RANSAC
-    result_ransac = global_registration_ransac(src_down, tgt_down, src_fpfh, tgt_fpfh, voxel_size)
-    print("[RANSAC] fitness:", result_ransac.fitness, "rmse:", result_ransac.inlier_rmse)
-    print("[RANSAC] T=\n", result_ransac.transformation)
-
+    # result_ransac = global_registration_ransac(src_down, tgt_down, src_fpfh, tgt_fpfh, voxel_size)
+    result_fgr = fgr(src_down, tgt_down, src_fpfh, tgt_fpfh, voxel_size)
+    print("[FGR] fitness:", result_fgr.fitness, "rmse:", result_fgr.inlier_rmse)
+    print("[FGR] T=\n", result_fgr.transformation)
+    T = result_fgr.transformation
     # 2) 精配準：ICP（point-to-plane）
-    result_icp = refine_icp(src, tgt, result_ransac.transformation, voxel_size)
+    
+    result_icp = multiscale_refine_icp(src, tgt, T, voxel_size)
     T = result_icp.transformation
     T = np.linalg.inv(T)
     R = T[:3, :3]
@@ -119,8 +118,9 @@ def get_bbox_by_icp(color_img, point_cloud, intr, tgt ,viz=False) -> Tuple[np.nd
     tgt_aligned.transform(T)
 
     # 你可以選 AABB 或 OBB
-    bbox = tgt_aligned.get_oriented_bounding_box()  # OBB 比較貼物體
-
+    bbox = tgt_aligned.get_minimal_oriented_bounding_box()  # OBB 比較貼物體
+    hole_points = top_face_inset_corners_as_pcd(bbox)
+    peg_btn_point, rot = btn_face_center(bbox)
     print("[ICP] time   :", time.time() - start)
     print("[ICP] fitness:", result_icp.fitness)
     print("[ICP] rmse   :", result_icp.inlier_rmse)
@@ -129,10 +129,35 @@ def get_bbox_by_icp(color_img, point_cloud, intr, tgt ,viz=False) -> Tuple[np.nd
     print("[ICP] t=\n", t)
     print("[ICP] T=\n", T)
     print("[ICP] bbox=\n", np.asarray(bbox.get_box_points()))
-    if viz:
-        draw_registration_result(src, tgt, T, bbox=bbox)
-    return T, bbox ,result_icp
 
+    if viz:
+        s = copy.deepcopy(src)
+        t = copy.deepcopy(tgt)
+
+        # s.paint_uniform_color([1, 0.706, 0])
+        t.paint_uniform_color([0, 0.651, 0.929])
+        # 注意：你這裡是把 target 變到 source/camera frame
+        t.transform(T)
+
+        coor = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05, origin=[0, 0, 0])
+        p = np.asarray(peg_btn_point.points)[0]   # 底面中心點 (3,)
+        T = np.eye(4)
+        T[:3, :3] = rot
+        T[:3,  3] = p
+        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
+        frame.transform(T)  # 套用完整位姿
+
+
+        geoms = [t,s, coor,hole_points,peg_btn_point,frame]
+        if bbox is not None:
+            bbox_ls = o3d.geometry.LineSet.create_from_oriented_bounding_box(bbox)
+            bbox_ls.paint_uniform_color([1, 0, 0])  # 線框紅色
+            geoms.append(bbox_ls)
+        if all_pcd is not None:
+            geoms.append(all_pcd)
+
+        o3d.visualization.draw_geometries(geoms)
+    return T, bbox ,result_icp
 
 def main():
     iCPNode = startNode()
@@ -145,8 +170,30 @@ def main():
 
     if data is not None:
         color_img, depth_img, point_cloud = data
+        field_img_mask_center, field_img_colored_mask, field_masks = generate_masks(color_img)
+
+        mask,_ = get_cylinder_mask(
+            [],
+            field_img_mask_center,
+            field_masks
+        )
+        src = masked_pointcloud_from_o3d(point_cloud, mask, intr)
         tgt = mesh_to_pcd("peg_30.5mm - Part 1.stl")
-        T, bbox, result_icp = get_bbox_by_icp(color_img, point_cloud, intr, tgt, viz=True)
+        T, bbox, result_icp = get_bbox_by_icp(src, tgt, viz=True, all_pcd=point_cloud)
+
+        
+        target_mask, target_id = get_platform_mask(field_img_mask_center, field_masks)
+        print("[Debug] target_id =", target_id)
+        cv2.imshow("field_img_mask_center", field_img_mask_center)
+        cv2.imshow("field_img_colored_mask", field_img_colored_mask)
+        visualize_mask(color_img, target_mask, "target_mask")
+        cv2.waitKey(1000)
+
+        src = masked_pointcloud_from_o3d(point_cloud, target_mask, intr)
+        tgt = mesh_to_pcd("hole_assembly.stl")
+        get_bbox_by_icp(src, tgt, viz=True, all_pcd=point_cloud)
+
+        
     else:
         print("No data received.")
 

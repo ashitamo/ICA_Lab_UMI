@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple , Sequence
 import base64, json, os
 from openai import OpenAI
 import re 
@@ -19,7 +19,15 @@ def _png_bytes_to_data_uri(png_bytes: bytes) -> str:
     b64 = base64.b64encode(png_bytes).decode("utf-8")
     return f"data:image/png;base64,{b64}"
 
-def generate_masks(field_img_color: np.ndarray):
+def generate_masks(field_img_color: np.ndarray) -> List[Dict[str, Any]]:
+    """
+    generate_masks 的 Docstring
+    
+    :param field_img_color: 說明
+    :type field_img_color: np.ndarray
+    :return: 說明
+    : field_img_mask_center, field_img_colored_mask, field_masks
+    """
     # ===== SAM2 config =====
     POINTS_PER_SIDE        = 32
     PRED_IOU_THRESH        = 0.7
@@ -55,7 +63,7 @@ def generate_masks(field_img_color: np.ndarray):
         ys, xs = np.where(binmask > 0)
         return (float(xs.mean()), float(ys.mean())) if len(xs) else None
     
-    def _apply_colored_masks(img_bgr: np.ndarray, masks: list, alpha: float = 0.5, seed: int = 42) -> np.ndarray:
+    def _apply_colored_masks(img_bgr: np.ndarray, masks: list, alpha: float = 0.25, seed: int = 84) -> np.ndarray:
         """對圖片套用彩色遮罩。"""
         processed = img_bgr.copy()
         h, w = processed.shape[:2]
@@ -90,37 +98,96 @@ def generate_masks(field_img_color: np.ndarray):
     field_img_mask_center = field_img_mask_center.copy()
 
     return field_img_mask_center, field_img_colored_mask, field_masks
-    
-def get_hole_mask(
-    demo_img_color_list: List[np.ndarray],
-    field_img_color: np.ndarray,
+
+def ask_vlm_field_platform_mask_id(
+    field_img_with_ids_bgr: np.ndarray,
+    valid_ids: Optional[Sequence[int]] = None,
+    model: str = "gpt-4.1",
+    temperature: float = 0.0,
+) -> Optional[int]:
+    """
+    輸入：一張 FIELD 影像，影像中每個 segmented region 都有「colored mask」與「數字 mask id」
+    任務：找出「帶洞的平面（platform top surface with circular holes）」那一塊 region 的 mask id。
+
+    回傳：
+    target_mask_id (int) 或 None
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set")
+    client = OpenAI(api_key=api_key)
+
+    field_uri = _png_bytes_to_data_uri(_img_bgr_to_png_bytes(field_img_with_ids_bgr))
+
+    # 把 valid_ids 放進 prompt，能顯著降低亂答（如果你有的話）
+    valid_ids_str = ""
+    if valid_ids is not None:
+        valid_ids_str = f"The valid mask IDs are: {list(map(int, valid_ids))}.\n"
+
+    system_prompt = (
+        "You are a careful vision assistant.\n"
+        "You will receive ONE image (FIELD).\n"
+        "The image contains multiple colored segmentation regions, each labeled with a numeric mask ID.\n"
+        f"{valid_ids_str}"
+        "\n"
+        "TASK:\n"
+        "- Identify the PLATFORM TOP SURFACE region (a flat planar surface) that CONTAINS MULTIPLE CIRCULAR HOLES.\n"
+        "- Return the numeric mask ID of that single planar region (NOT the hole IDs, not screws, not background).\n"
+        "- If multiple planar regions exist, choose the one that clearly has several circular holes on it.\n"
+        "\n"
+        "STRICT OUTPUT FORMAT (JSON ONLY):\n"
+        "{\"target_mask_id\": <int>}\n"
+        "Return STRICT JSON ONLY. No extra words."
+    )
+
+    user_prompt = "Return the mask ID of the planar platform surface that contains the circular holes."
+    print("[VLM] asking")
+    resp = client.chat.completions.create(
+        model=model,
+        temperature=temperature,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "text", "text": user_prompt},
+                {"type": "image_url", "image_url": {"url": field_uri}},
+            ]},
+        ],
+    )
+
+    text = resp.choices[0].message.content.strip()
+
+    # robust JSON parse
+    try:
+        data = json.loads(text)
+    except Exception:
+        m = re.search(r"\{.*\}", text, flags=re.S)
+        if not m:
+            raise ValueError(f"VLM did not return valid JSON: {text}")
+        data = json.loads(m.group(0))
+
+    val = data.get("target_mask_id", None)
+    if val is None:
+        return None
+
+    try:
+        val = int(val)
+    except Exception:
+        raise ValueError(f"target_mask_id is not an integer: {val}")
+
+    if valid_ids is not None and val not in set(map(int, valid_ids)):
+        print(f"[VLM warn] target_mask_id {val} not in valid list {list(map(int, valid_ids))}")
+        return None
+
+    return val
+
+def get_platform_mask(
     processed_field_img: np.ndarray,
     field_masks: List[Dict[str, Any]],
 ) -> Optional[np.ndarray]:
     target_id: Optional[int] = None
     target_mask: Optional[np.ndarray] = None
 
-    use_vlm = bool(os.environ.get("OPENAI_API_KEY"))
-    if not use_vlm:
-        print("[VLM skip] OPENAI_API_KEY not set; skip VLM logic")
-    else:
-        try:
-            # 第一次：讀出所有 cylinder IDs（你原本的函式）
-            cylinder_ids = ask_vlm_field_cylinder_ids(processed_field_img, model="gpt-4.1", temperature=0.0)
-            print("[Debug] All cylinder_ids(B) =", cylinder_ids)
-
-            # 第二次：從 DEMO 圖判斷要夾哪一個
-            target_cyl_id = ask_vlm_field_target_cylinder_from_demo(
-                demo_img_color_list, processed_field_img, cylinder_ids, model="gpt-4.1", temperature=0.0
-            )
-            print("[Debug] target_cylinder_id =", target_cyl_id)
-
-            if target_cyl_id is not None:
-                target_id = int(target_cyl_id)
-
-        except Exception as e:
-            print("[VLM warn][grasp] cylinder-id reading failed:", e)
-
+    target_id = ask_vlm_field_platform_mask_id(processed_field_img, model="gpt-4.1", temperature=0.0)
     # 依 target_id 取回對應 segmentation mask
     if target_id is not None and 0 <= target_id < len(field_masks):
         m = field_masks[target_id]["segmentation"]
@@ -131,15 +198,10 @@ def get_hole_mask(
     else:
         if target_id is not None:
             print(f"[Warn] target_id={target_id} out of range (0~{len(field_masks)-1})")
-
-    cv2.imshow("Processed Field Image", processed_field_img)
-    cv2.waitKey(1000)
-
-    return target_mask
+    return target_mask, target_id
 
 def get_cylinder_mask(
     demo_img_color_list: List[np.ndarray],
-    field_img_color: np.ndarray,
     processed_field_img: np.ndarray,
     field_masks: List[Dict[str, Any]],
 ) -> Optional[np.ndarray]:
@@ -155,26 +217,19 @@ def get_cylinder_mask(
     target_id: Optional[int] = None
     target_mask: Optional[np.ndarray] = None
 
-    use_vlm = bool(os.environ.get("OPENAI_API_KEY"))
-    if not use_vlm:
-        print("[VLM skip] OPENAI_API_KEY not set; skip VLM logic")
-    else:
-        try:
-            # 第一次：讀出所有 cylinder IDs（你原本的函式）
-            cylinder_ids = ask_vlm_field_cylinder_ids(processed_field_img, model="gpt-4.1", temperature=0.0)
-            print("[Debug] All cylinder_ids(B) =", cylinder_ids)
-
-            # 第二次：從 DEMO 圖判斷要夾哪一個
-            target_cyl_id = ask_vlm_field_target_cylinder_from_demo(
-                demo_img_color_list, processed_field_img, cylinder_ids, model="gpt-4.1", temperature=0.0
-            )
-            print("[Debug] target_cylinder_id =", target_cyl_id)
-
-            if target_cyl_id is not None:
-                target_id = int(target_cyl_id)
-
-        except Exception as e:
-            print("[VLM warn][grasp] cylinder-id reading failed:", e)
+    try:
+        # 第一次：讀出所有 cylinder IDs（你原本的函式）
+        cylinder_ids = ask_vlm_field_cylinder_ids(processed_field_img, model="gpt-4.1", temperature=0.0)
+        print("[Debug] All cylinder_ids(B) =", cylinder_ids)
+        # 第二次：從 DEMO 圖判斷要夾哪一個
+        target_cyl_id = ask_vlm_field_target_cylinder_from_demo(
+            demo_img_color_list, processed_field_img, cylinder_ids, model="gpt-4.1", temperature=0.0
+        )
+        print("[Debug] target_cylinder_id =", target_cyl_id)
+        if target_cyl_id is not None:
+            target_id = int(target_cyl_id)
+    except Exception as e:
+        print("[VLM warn][grasp] cylinder-id reading failed:", e)
 
     # 依 target_id 取回對應 segmentation mask
     if target_id is not None and 0 <= target_id < len(field_masks):
@@ -187,90 +242,8 @@ def get_cylinder_mask(
         if target_id is not None:
             print(f"[Warn] target_id={target_id} out of range (0~{len(field_masks)-1})")
 
-    cv2.imshow("Processed Field Image", processed_field_img)
-    cv2.waitKey(1000)
+    return target_mask, target_id
 
-    return target_mask
-
-def ask_vlm_field_target_hole_id(
-    field_img_with_ids_bgr: np.ndarray,
-    model: str = "gpt-4.1",
-    temperature: float = 0.0,
-) -> Optional[int]:
-    """
-    
-    """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not set")
-    client = OpenAI(api_key=api_key)
-
-    demo_uris = [
-        _png_bytes_to_data_uri(_img_bgr_to_png_bytes(img))
-        for img in demo_img_bgr_list
-    ]
-    field_uri = _png_bytes_to_data_uri(_img_bgr_to_png_bytes(field_img_with_ids_bgr))
-
-    system_prompt = (
-        "You are a careful vision assistant.\n"
-        "Image A (DEMO): You will receive multiple DEMO images (time sequence) showing a gripper moving toward a specific yellow/orange cylinder.\n"
-        "Image B (FIELD): You will also receive one FIELD image with all cylinders labeled by numeric IDs.\n"
-        f"The valid cylinder IDs are: {cylinder_ids}.\n"
-        "All cylinders are placed directly on a flat table.\n"
-        "\n"
-        "TASK:\n"
-        "- Focus only on the cylinder that the gripper is about to grasp in sequence Image A.\n"
-        "- Compare its relative position and color/shape with the labeled cylinders in Image B.\n"
-        "- Find the matching cylinder ID from Image B.\n"
-        "- If uncertain, select the cylinder whose relative position and appearance most closely match the one in Image A, "
-        "or the one located near the center of the image.\n"
-        "\n"
-        "STRICT OUTPUT FORMAT:\n"
-        "{\"target_cylinder_id\": <int>}\n"
-        "Return STRICT JSON ONLY. No extra words."
-    )
-
-    user_prompt = (
-        "These DEMO images show a gripper approaching a cylinder. "
-        "Use all frames together to infer which cylinder will be grasped, "
-        "then match it to the labeled FIELD image and return its ID."
-    )
-
-    message_content = [{"type": "text", "text": user_prompt}]
-    for uri in demo_uris:
-        message_content.append({"type": "image_url", "image_url": {"url": uri}})
-    message_content.append({"type": "image_url", "image_url": {"url": field_uri}})
-
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": message_content},
-        ],
-    )
-
-    text = resp.choices[0].message.content.strip()
-    try:
-        data = json.loads(text)
-    except Exception:
-        m = re.search(r"\{.*\}", text, flags=re.S)
-        if not m:
-            raise ValueError(f"VLM did not return valid JSON: {text}")
-        data = json.loads(m.group(0))
-
-    val = data.get("target_cylinder_id", None)
-    if val is None:
-        return None
-
-    try:
-        val = int(val)
-        if val not in cylinder_ids:
-            print(f"[VLM warn] target_cylinder_id {val} not in valid list {cylinder_ids}")
-            return None
-        return val
-    except Exception:
-        raise ValueError(f"target_cylinder_id is not an integer: {val}")
 
 def ask_vlm_field_cylinder_ids(
     field_img_with_ids_bgr: np.ndarray,
@@ -508,3 +481,19 @@ def masked_pointcloud_from_o3d(
         out.colors = o3d.utility.Vector3dVector(cols[sel_idx])
 
     return out
+
+def visualize_mask(img_bgr: np.ndarray, mask: np.ndarray, title: str = "Mask") -> None:
+    """可視化單個遮罩。"""
+    # 創建遮罩疊加圖
+    overlay = img_bgr.copy()
+    mask_binary = (mask > 0).astype(np.uint8)
+    
+    # 綠色遮罩
+    overlay[mask_binary > 0] = [0, 255, 0]
+    result = cv2.addWeighted(img_bgr, 0.7, overlay, 0.3, 0)
+    
+    # 畫輪廓
+    contours, _ = cv2.findContours(mask_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(result, contours, -1, (0, 255, 255), 2)
+    
+    cv2.imshow(title, result)

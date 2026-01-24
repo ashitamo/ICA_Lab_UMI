@@ -2,6 +2,7 @@ import copy
 import numpy as np
 import open3d as o3d
 from scipy.spatial.transform import Rotation
+from typing import Any, Dict, List, Optional, Tuple
 
 def mesh_to_pcd(mesh: o3d.geometry.TriangleMesh | str) -> o3d.geometry.PointCloud:
     if isinstance(mesh, str):
@@ -67,12 +68,12 @@ def pc2_to_open3d(msg, remove_nans=True) -> o3d.geometry.PointCloud:
 def preprocess_point_cloud(pcd: o3d.geometry.PointCloud, voxel_size: float):
     pcd_down = pcd.voxel_down_sample(voxel_size)
 
-    radius_normal = voxel_size * 2.0
+    radius_normal = voxel_size * 3.0
     pcd_down.estimate_normals(
         o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30)
     )
 
-    radius_feature = voxel_size * 5.0
+    radius_feature = voxel_size * 10.0
     fpfh = o3d.pipelines.registration.compute_fpfh_feature(
         pcd_down,
         o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100)
@@ -89,16 +90,25 @@ def global_registration_ransac(src_down, tgt_down, src_fpfh, tgt_fpfh, voxel_siz
         estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
         ransac_n=4,
         checkers=[
-            o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.85),
             o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(dist_thresh),
         ],
-        criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(100000, 0.999)
+        criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(500000, 0.999)
     )
     return result
 
+def fgr(src_down, tgt_down, src_fpfh, tgt_fpfh, voxel_size: float):
+    dist_thresh = voxel_size * 5.0
+    result = o3d.pipelines.registration.registration_fgr_based_on_feature_matching(
+        src_down, tgt_down, src_fpfh, tgt_fpfh,
+        o3d.pipelines.registration.FastGlobalRegistrationOption(
+            maximum_correspondence_distance=dist_thresh
+        )
+    )
+    return result
 
 def refine_icp(src, tgt, init_T, voxel_size: float):
-    dist_thresh = voxel_size * 0.5
+    dist_thresh = voxel_size * 1.0
     # point-to-plane 通常比 point-to-point 好，但 target 需要 normals
     if not tgt.has_normals():
         tgt.estimate_normals(
@@ -110,29 +120,145 @@ def refine_icp(src, tgt, init_T, voxel_size: float):
         max_correspondence_distance=dist_thresh,
         init=init_T,
         estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPlane(),
-        criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=200)
+        criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=1000)
     )
+    
     return result
 
-def draw_registration_result(source, target, transformation, bbox=None):
-    s = copy.deepcopy(source)
-    t = copy.deepcopy(target)
+def multiscale_refine_icp(src, tgt, T_init, voxel_size):
+    T = T_init.copy()
 
-    # s.paint_uniform_color([1, 0.706, 0])
-    t.paint_uniform_color([0, 0.651, 0.929])
+    for i in [2.0, 1.0, 0.5, 0.25]:
+        v = i * voxel_size
+        src_d = src.voxel_down_sample(v)
+        tgt_d = tgt.voxel_down_sample(v)
 
-    # 注意：你這裡是把 target 變到 source/camera frame
-    t.transform(transformation)
+        # point-to-plane 需要 normals（至少 target 要有）
+        tgt_d.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=v*2.0, max_nn=30))
+        src_d.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=v*2.0, max_nn=30))
 
-    coor = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05, origin=[0, 0, 0])
+        result = o3d.pipelines.registration.registration_icp(
+            src_d, tgt_d,
+            max_correspondence_distance=v * 3.0,
+            init=T,
+            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+            criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=500)
+        )
 
-    geoms = [s, coor]
-    if bbox is not None:
-        bbox_ls = o3d.geometry.LineSet.create_from_oriented_bounding_box(bbox)
-        bbox_ls.paint_uniform_color([1, 0, 0])  # 線框紅色
-        geoms.append(bbox_ls)
+        T = result.transformation
 
-    o3d.visualization.draw_geometries(geoms)
+    return result
+
+def top_face_inset_corners_as_pcd(
+    bbox: o3d.geometry.OrientedBoundingBox,
+    inset_ratio: float = 43.5 / 174.0,
+) -> o3d.geometry.PointCloud:
+    """
+    根據 minimal OBB 的頂面，取四個「內縮角點」：
+    - 頂面定義：extent 最小的軸為厚度軸 w，頂面中心 = center + w*(thickness/2)
+    - 內縮：沿平面兩方向 u/v，各從邊緣往內退 inset_ratio * (該方向全長)
+
+    回傳：含 4 點的 open3d.geometry.PointCloud
+    """
+    c = np.asarray(bbox.center, dtype=np.float64)
+    Rm = np.asarray(bbox.R, dtype=np.float64)          # columns are box axes
+    ext = np.asarray(bbox.extent, dtype=np.float64)    # lengths along each axis
+
+    # 1) 厚度軸：extent 最小那個
+    k_thin = int(np.argmin(ext))
+    w = Rm[:, k_thin]          # normal axis (thickness)
+    thickness = ext[k_thin]
+
+    # 2) 其餘兩軸就是頂面內的 u, v
+    idx = [0, 1, 2]
+    idx.remove(k_thin)
+    i_u, i_v = idx[0], idx[1]
+
+    u = Rm[:, i_u]
+    v = Rm[:, i_v]
+    Lu = float(ext[i_u])
+    Lv = float(ext[i_v])
+
+    # 3) 頂面中心（沿 thickness 軸正向那一面）
+    c_top = c + w * (thickness * 0.5)
+
+    # 4) 內縮後的半長（從邊緣退 inset_ratio*全長）
+    frac = float(inset_ratio)
+    hu = Lu * (0.5 - frac)
+    hv = Lv * (0.5 - frac)
+    if hu <= 0 or hv <= 0:
+        raise ValueError(f"inset_ratio={frac} too large for extents Lu={Lu}, Lv={Lv}")
+
+    # 5) 四個角點（順時針）
+    corners = np.stack([
+        c_top + hu*u + hv*v,
+        c_top + hu*u - hv*v,
+        c_top - hu*u - hv*v,
+        c_top - hu*u + hv*v,
+    ], axis=0)
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(corners)
+    return pcd
+
+
+def btn_face_center(
+    bbox: o3d.geometry.OrientedBoundingBox,
+) -> Tuple[o3d.geometry.PointCloud, np.ndarray]:
+    """
+    以「離原點最遠的那個面」作為底面。
+
+    定義：
+    - OBB 有 3 個局部軸 a0,a1,a2（bbox.R 的 columns），以及 extents e0,e1,e2
+    - 每個軸有兩個面中心：c ± ai*(ei/2)
+    - 計算六個面中心到原點距離 ||center_face||，取最大者為底面
+    - 該面的法向量取 ±ai（朝盒子外側，亦即 face_center - bbox.center 的方向）
+
+    回傳：
+      - pc: 只含 1 點（底面中心點）
+      - R_face: 3x3 rotation，z 軸為該面的外側法向量，x/y 在面內（右手系）
+    """
+    c = np.asarray(bbox.center, dtype=np.float64)
+    Rm = np.asarray(bbox.R, dtype=np.float64)           # columns are local axes
+    ext = np.asarray(bbox.extent, dtype=np.float64)     # lengths along each axis
+
+    # 三個局部軸
+    axes = [Rm[:, 0], Rm[:, 1], Rm[:, 2]]
+
+    best = None  # (dist, axis_index, sign, face_center)
+    for i, a in enumerate(axes):
+        half = 0.5 * float(ext[i])
+        for s in (+1.0, -1.0):
+            fc = c + s * a * half
+            d = np.linalg.norm(fc)  # 到原點距離
+            if best is None or d > best[0]:
+                best = (d, i, s, fc)
+
+    _, k_axis, sign, face_center = best
+    w = axes[k_axis]
+
+    # 外側法向量：由中心指向該面（保證朝外）
+    z_axis = (face_center - c)
+    z_axis = z_axis / (np.linalg.norm(z_axis) + 1e-12)
+
+    # 面內兩軸：從另外兩個 bbox 軸挑兩根
+    idx = [0, 1, 2]
+    idx.remove(k_axis)
+    x_axis = axes[idx[0]]
+    y_axis = axes[idx[1]]
+
+    # 讓 x_axis 與 z_axis 正交，並建立右手系 y = z × x
+    x_axis = x_axis - z_axis * np.dot(x_axis, z_axis)
+    x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-12)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis = y_axis / (np.linalg.norm(y_axis) + 1e-12)
+
+    R_face = np.column_stack([x_axis, y_axis, z_axis])
+
+    pc = o3d.geometry.PointCloud()
+    pc.points = o3d.utility.Vector3dVector([face_center])
+
+    return pc, R_face
 
 if __name__ == "__main__":
     tgt = load_pts_xyz("peg_30.pts")   # 參考/完美點雲：target
@@ -181,4 +307,3 @@ if __name__ == "__main__":
     print("[ICP] t=\n", t)
     print("[ICP] T=\n", T)
 
-    draw_registration_result(src, tgt, T)
