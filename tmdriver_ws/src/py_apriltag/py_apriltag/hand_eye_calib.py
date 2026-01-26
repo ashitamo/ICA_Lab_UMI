@@ -384,15 +384,15 @@ CAM_MTX = np.array([[fx, 0, cx],
 
 def main():
     ## hand-eye calibration positions
-    pos = [[-0.00, -0.38, 0.3, 3.14159, 0.0, 3.14159]]
+    pos = [[0.55, -0.03, 0.3, 3.14159, 0.0, 3.14159]]
     z_list = [0.25+i*0.01 for i in range(11)]
-    first_angle = (-90)*math.pi/180.0
+    first_angle = (-180)*math.pi/180.0
     last_angle = (180)*math.pi/180.0
     import random
     for i,z in enumerate(z_list):
         yaw = first_angle + i*(last_angle-first_angle)/len(z_list)
         temp = generate_square_poses_faceZ_fixed_yaw(
-            center_xy = (-0.0, -0.38),  # 正方形中心 (cx, cy)
+            center_xy = (pos[0][0], pos[0][1]),  # 正方形中心 (cx, cy)
             side = 0.25,
             z_list = [z],   # 一次產兩層高度
             yaw_fixed = yaw,     # 你的指定 yaw（不會被自動更動）
@@ -575,8 +575,8 @@ def getTagPos():
 
 
 if __name__ == '__main__':
-    # main()
-    getTagPos()
+    main()
+    # getTagPos()
 
 '''
 [[-0.01433173, 0.99963671, 0.02282667,-0.34401851],

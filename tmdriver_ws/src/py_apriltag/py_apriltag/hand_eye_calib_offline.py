@@ -11,7 +11,7 @@ T_a_A =  np.array([[ 0, 1, 0, 0],
                   [ 0, 0,  0 ,1]])
 T_A_a = np.linalg.inv(T_a_A)
 
-filename = 'calib_results14.pkl'  # change to your filename
+filename = 'calib_results2.pkl'  # change to your filename
 # filename = 'calib_results3.pkl'  # change to your filename
 with open(filename,'rb') as f:
     T_W_G_list,T_C_A_list,_,_ = pickle.load(f)
@@ -36,6 +36,7 @@ for method_name,method in methods.items():
     r,t = HEC(T_W_G_list[1:],T_C_A_list[1:],method=method)
     T_G_C[:3,:3] = r
     T_G_C[:3,3] = t.reshape(3)
+    T_C_G = np.linalg.inv(T_G_C)
 
     T_C_A = T_C_A_list[0]
     T_W_G = T_W_G_list[0]
@@ -86,8 +87,8 @@ for method_name,method in methods.items():
 # Read from YAML file
 with open('ICA_Lab_UMI_Config.yaml', 'r') as file:
     config_data = yaml.safe_load(file)
-T_G_C = np.array(config_data['T_G_C'])
-T_C_G = np.array(config_data['T_C_G'])
+# T_G_C = np.array(config_data['T_G_C'])
+# T_C_G = np.array(config_data['T_C_G'])
 
 # Write to YAML file
 with open('ICA_Lab_UMI_Config.yaml', 'r') as file:

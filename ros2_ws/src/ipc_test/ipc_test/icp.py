@@ -3,11 +3,24 @@ import numpy as np
 import open3d as o3d
 from scipy.spatial.transform import Rotation
 from typing import Any, Dict, List, Optional, Tuple
+import os,pickle
 
 def mesh_to_pcd(mesh: o3d.geometry.TriangleMesh | str) -> o3d.geometry.PointCloud:
+    print("[Debug] mesh_to_pcd")
     if isinstance(mesh, str):
-        mesh = o3d.io.read_triangle_mesh(mesh)
-    pointcloud = mesh.sample_points_poisson_disk(100000)
+        # mode paht sub format to .pkl
+        pcd_pkl_path = mesh.replace(".stl", ".pkl")
+        if os.path.exists(pcd_pkl_path):
+            pointcloud_np = pickle.load(open(pcd_pkl_path, "rb"))
+            pointcloud = o3d.geometry.PointCloud()
+            pointcloud.points = o3d.utility.Vector3dVector(pointcloud_np)
+            print("[Debug] load pointcloud from", pcd_pkl_path, "pointcloud points =", len(pointcloud.points))
+            return pointcloud
+        pcd_mesh = o3d.io.read_triangle_mesh(mesh)
+    pointcloud = pcd_mesh.sample_points_poisson_disk(100000)
+    if isinstance(mesh, str):
+        pickle.dump(np.asarray(pointcloud.points, dtype=np.float64), open(pcd_pkl_path, "wb"))
+    print("[Debug] pointcloud points =", len(pointcloud.points))
     return pointcloud
 
 def load_pts_xyz(path: str) -> o3d.geometry.PointCloud:
@@ -30,39 +43,6 @@ def load_pts_xyz(path: str) -> o3d.geometry.PointCloud:
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(np.asarray(pts, dtype=np.float64))
-    return pcd
-
-def pc2_to_open3d(msg, remove_nans=True) -> o3d.geometry.PointCloud:
-    if msg.point_step != 20:
-        raise ValueError(f"Expected point_step=20, got {msg.point_step}. This fast path assumes RealSense XYZ+RGB layout.")
-
-    dtype = np.dtype([
-        ("x",   np.float32),
-        ("y",   np.float32),
-        ("z",   np.float32),
-        ("pad", np.uint32),   # 12~15 padding
-        ("rgb", np.float32),  # 16~19 packed RGB
-    ])
-
-    arr = np.frombuffer(msg.data, dtype=dtype)  # (N,)
-    xyz = np.stack([arr["x"], arr["y"], arr["z"]], axis=1).astype(np.float64, copy=False)
-
-    if remove_nans:
-        mask = np.isfinite(xyz).all(axis=1)
-        xyz = xyz[mask]
-        rgb_f = arr["rgb"][mask]
-    else:
-        rgb_f = arr["rgb"]
-
-    rgb_u32 = rgb_f.view(np.uint32)
-    r = ((rgb_u32 >> 16) & 255).astype(np.float64)
-    g = ((rgb_u32 >> 8) & 255).astype(np.float64)
-    b = (rgb_u32 & 255).astype(np.float64)
-    colors = np.stack([r, g, b], axis=1) / 255.0
-
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(xyz)
-    pcd.colors = o3d.utility.Vector3dVector(colors)
     return pcd
 
 def preprocess_point_cloud(pcd: o3d.geometry.PointCloud, voxel_size: float):
@@ -127,49 +107,61 @@ def refine_icp(src, tgt, init_T, voxel_size: float):
 
 def multiscale_refine_icp(src, tgt, T_init, voxel_size):
     T = T_init.copy()
+    for t in range(5):
+        for i in [2.0, 1.0, 0.5, 0.25, 0.1]:
+            if len(src.points) < 20000 and i == 0.25 and i == 0.1:
+                continue
+            v = i * voxel_size
+            src_d = src.voxel_down_sample(v)
+            tgt_d = tgt.voxel_down_sample(v)
 
-    for i in [2.0, 1.0, 0.5, 0.25]:
-        v = i * voxel_size
-        src_d = src.voxel_down_sample(v)
-        tgt_d = tgt.voxel_down_sample(v)
+            # point-to-plane 需要 normals（至少 target 要有）
+            tgt_d.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=v*2.0, max_nn=30))
+            src_d.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=v*2.0, max_nn=30))
 
-        # point-to-plane 需要 normals（至少 target 要有）
-        tgt_d.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=v*2.0, max_nn=30))
-        src_d.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=v*2.0, max_nn=30))
+            result = o3d.pipelines.registration.registration_icp(
+                src_d, tgt_d,
+                max_correspondence_distance=v * 3.0,
+                init=T,
+                estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+                criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=500)
+            )
 
-        result = o3d.pipelines.registration.registration_icp(
-            src_d, tgt_d,
-            max_correspondence_distance=v * 3.0,
-            init=T,
-            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPlane(),
-            criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=500)
-        )
-
-        T = result.transformation
-
+            T = result.transformation
+            print("[ICP] voxel size:", v, "fitness:", result.fitness , "rmse:", result.inlier_rmse)
+        if result.fitness > 0.8 or t>2 :
+            break
     return result
 
 def top_face_inset_corners_as_pcd(
     bbox: o3d.geometry.OrientedBoundingBox,
     inset_ratio: float = 43.5 / 174.0,
+    origin: np.ndarray | None = None,   # 相機原點；預設 [0,0,0]
 ) -> o3d.geometry.PointCloud:
     """
-    根據 minimal OBB 的頂面，取四個「內縮角點」：
-    - 頂面定義：extent 最小的軸為厚度軸 w，頂面中心 = center + w*(thickness/2)
-    - 內縮：沿平面兩方向 u/v，各從邊緣往內退 inset_ratio * (該方向全長)
+    根據 minimal OBB，取「離相機較近」那一面的四個內縮角點。
+    - 厚度軸 w：extent 最小那個軸
+    - 兩個候選面中心：c ± w*(thickness/2)
+    - 選到 origin 距離較小的那一面
+    - 內縮：沿面內 u/v 各從邊緣往內退 inset_ratio * (該方向全長)
 
-    回傳：含 4 點的 open3d.geometry.PointCloud
+    回傳：含 4 點的 PointCloud
     """
+    if origin is None:
+        origin = np.zeros(3, dtype=np.float64)
+    else:
+        origin = np.asarray(origin, dtype=np.float64).reshape(3)
+
     c = np.asarray(bbox.center, dtype=np.float64)
     Rm = np.asarray(bbox.R, dtype=np.float64)          # columns are box axes
     ext = np.asarray(bbox.extent, dtype=np.float64)    # lengths along each axis
 
     # 1) 厚度軸：extent 最小那個
     k_thin = int(np.argmin(ext))
-    w = Rm[:, k_thin]          # normal axis (thickness)
-    thickness = ext[k_thin]
+    w = Rm[:, k_thin]
+    thickness = float(ext[k_thin])
 
-    # 2) 其餘兩軸就是頂面內的 u, v
+    # 2) 面內兩軸 u, v
     idx = [0, 1, 2]
     idx.remove(k_thin)
     i_u, i_v = idx[0], idx[1]
@@ -179,22 +171,28 @@ def top_face_inset_corners_as_pcd(
     Lu = float(ext[i_u])
     Lv = float(ext[i_v])
 
-    # 3) 頂面中心（沿 thickness 軸正向那一面）
-    c_top = c + w * (thickness * 0.5)
+    # 3) 兩個候選面中心：選離 origin 較近的
+    c_plus  = c + w * (thickness * 0.5)
+    c_minus = c - w * (thickness * 0.5)
 
-    # 4) 內縮後的半長（從邊緣退 inset_ratio*全長）
+    if np.linalg.norm(c_plus - origin) <= np.linalg.norm(c_minus - origin):
+        c_face = c_plus
+    else:
+        c_face = c_minus
+
+    # 4) 內縮後的半長
     frac = float(inset_ratio)
     hu = Lu * (0.5 - frac)
     hv = Lv * (0.5 - frac)
     if hu <= 0 or hv <= 0:
         raise ValueError(f"inset_ratio={frac} too large for extents Lu={Lu}, Lv={Lv}")
 
-    # 5) 四個角點（順時針）
+    # 5) 四個內縮角點
     corners = np.stack([
-        c_top + hu*u + hv*v,
-        c_top + hu*u - hv*v,
-        c_top - hu*u - hv*v,
-        c_top - hu*u + hv*v,
+        c_face + hu*u + hv*v,
+        c_face + hu*u - hv*v,
+        c_face - hu*u - hv*v,
+        c_face - hu*u + hv*v,
     ], axis=0)
 
     pcd = o3d.geometry.PointCloud()

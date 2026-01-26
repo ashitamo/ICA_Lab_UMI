@@ -433,6 +433,7 @@ def masked_pointcloud_from_o3d(
         assume_organized = (N == H * W)
 
     if assume_organized:
+        print("[Debug] assume_organized")
         # 直接把點 reshape 成 (H,W,3)，用 mask 索引
         pts_img = pts.reshape(H, W, 3)
         sel_pts = pts_img[mask_bool]
@@ -446,7 +447,7 @@ def masked_pointcloud_from_o3d(
             out.colors = o3d.utility.Vector3dVector(sel_cols)
 
         return out
-
+    print("[Debug] not assume_organized")
     # unordered：把每個 3D 點投影回像素 (u,v)，用 mask 篩選
     X = pts[:, 0]; Y = pts[:, 1]; Z = pts[:, 2]
 
