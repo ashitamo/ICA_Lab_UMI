@@ -107,8 +107,8 @@ def refine_icp(src, tgt, init_T, voxel_size: float):
 
 def multiscale_refine_icp(src, tgt, T_init, voxel_size):
     T = T_init.copy()
-    for t in range(5):
-        for i in [2.0, 1.0, 0.5, 0.25, 0.1]:
+    for t in range(3):
+        for i in [2.0, 1.0, 0.5, 0.25, 0.15]:
             if len(src.points) < 20000 and i == 0.25 and i == 0.1:
                 continue
             v = i * voxel_size
@@ -199,7 +199,28 @@ def top_face_inset_corners_as_pcd(
     pcd.points = o3d.utility.Vector3dVector(corners)
     return pcd
 
+def order_4_holes_world_xy(holes_W):
+    """
+    holes_W: (4,3) world coords
+    return: 
+    """
+    P = np.asarray(holes_W, dtype=float)
+    assert P.shape == (4,3)
 
+    # 先用 y 分成上/下兩排（y大=上；如果你world y相反就換成小=上）
+    idx_sorted_by_y = np.argsort(P[:,1])  # y from small->large
+    bottom2 = idx_sorted_by_y[:2]
+    top2    = idx_sorted_by_y[2:]
+
+    # 上排：按 x 小->大 = 左->右
+    top2 = top2[np.argsort(P[top2,0])]
+    # 下排：按 x 小->大 = 左->右
+    bottom2 = bottom2[np.argsort(P[bottom2,0])]
+
+    LU, RU = top2[0], top2[1]
+    LD, RD = bottom2[0], bottom2[1]
+
+    return holes_W[[LU,RU,RD,LD]]
 def top_and_bottom_face_centers(
     bbox: o3d.geometry.OrientedBoundingBox,
 ) -> Tuple[
@@ -234,6 +255,11 @@ def top_and_bottom_face_centers(
     top = min(faces, key=lambda x: x[0])
     bottom = max(faces, key=lambda x: x[0])
 
+    def _Rzto0(R):
+        rot = Rotation.from_matrix(R).as_euler('xyz', degrees=False)
+        rot[2] = 0.0
+        return Rotation.from_euler('xyz', rot, degrees=False).as_matrix()
+    
     def _face_pose(face_tuple):
         _, k_axis, _, face_center = face_tuple
         w = axes[k_axis]
@@ -262,7 +288,9 @@ def top_and_bottom_face_centers(
         return pc, R_face
 
     top_pc, top_R = _face_pose(top)
+    # top_R = _Rzto0(top_R)
     bottom_pc, bottom_R = _face_pose(bottom)
+    # bottom_R = _Rzto0(bottom_R)
 
     return top_pc, top_R, bottom_pc, bottom_R
 

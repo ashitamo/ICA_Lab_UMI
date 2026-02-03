@@ -85,6 +85,8 @@ def create_point_cloud(depth_image, color_image, width, height, fx, fy, cx, cy):
     
     return pcd
 
+
+
 class ICPNode(Node):
     def __init__(self):
         super().__init__('icp_node')
@@ -201,9 +203,11 @@ def get_bbox_by_icp(src, tgt ,viz=False , all_pcd=None) -> Tuple[np.ndarray, o3d
     tgt_down, tgt_fpfh = preprocess_point_cloud(tgt, voxel_size)
     print("[Debug] src_down points =", len(src_down.points))
     print("[Debug] tgt_down points =", len(tgt_down.points))
+    if len(src_down.points) <= 100 or len(tgt_down.points) == 100:
+        return np.eye(4), o3d.geometry.OrientedBoundingBox(), o3d.pipelines.registration.RegistrationResult()
     # 1) 粗配準：FPFH + RANSAC
     for i in range(3):
-        print("[Debug] try count =", i)
+        print("[Debug] try RANSAC FGR count =", i)
         result_fgr = fgr(src_down, tgt_down, src_fpfh, tgt_fpfh, voxel_size)
         print("[FGR] fitness:", result_fgr.fitness, "rmse:", result_fgr.inlier_rmse)
         print("[FGR] T=\n", result_fgr.transformation)
@@ -296,8 +300,8 @@ def get_bbox_by_icp(src, tgt ,viz=False , all_pcd=None) -> Tuple[np.ndarray, o3d
             bbox_ls = o3d.geometry.LineSet.create_from_oriented_bounding_box(bbox)
             bbox_ls.paint_uniform_color([1, 0, 0])  # 線框紅色
             geoms.append(bbox_ls)
-        # if all_pcd is not None:
-        #     geoms.append(all_pcd)
+        if all_pcd is not None:
+            geoms.append(all_pcd)
 
         o3d.visualization.draw_geometries(geoms)
     return T, bbox ,result_icp

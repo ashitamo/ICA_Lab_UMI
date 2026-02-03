@@ -1,6 +1,6 @@
 
 import rclpy.time_source
-from tm_msgs.srv import SetPositions,SetEvent
+from tm_msgs.srv import SetPositions,SetEvent,SendScript
 from tm_msgs.msg import FeedbackState
 from robotiq_85_msgs.msg import GripperCmd
 
@@ -21,11 +21,14 @@ class ArmCmd(Node):
         super().__init__('arm_cmd')
         self.pos_cli = self.create_client(SetPositions, 'set_positions')
         self.event_cli = self.create_client(SetEvent, 'set_event')
+        self.script_cli = self.create_client(SendScript, 'send_script')
         self.gripper_pub = self.create_publisher(GripperCmd, '/gripper/cmd', 10)
         self.pos_sub = self.create_subscription(FeedbackState, 'feedback_states', self.pos_callback, 10)
         while not self.pos_cli.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
         while not self.event_cli.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+        while not self.script_cli.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
         self.set_positions_req = SetPositions.Request()
         self.set_event_req = SetEvent.Request()
@@ -41,7 +44,7 @@ class ArmCmd(Node):
             return False
         return True
 
-    def send_request(self,positions=[0.2, -0.4, 0.35, 3.14159, 0.0, -1.57],
+    def set_positions(self,positions=[0.2, -0.4, 0.35, 3.14159, 0.0, -1.57],
                      velocity=0.1, acc_time=0.5, blend_percentage=100, fine_goal=False):
         
         self.target_positions = positions
@@ -79,153 +82,76 @@ class ArmCmd(Node):
         future = self.event_cli.call_async(self.set_event_req)
         # rclpy.spin_until_future_complete(self, future)
         return future.result()
-
+    def send_script(self,cmd):
+        script_req =  SendScript.Request()
+        script_req.id = "arm"
+        script_req.script = cmd
+        future = self.script_cli.call_async(script_req)
+        # rclpy.spin_until_future_complete(self, future)
+        return future.result()
+    
+    def set_positions_block(self,positions=[0.2, -0.4, 0.35, 3.14159, 0.0, -1.57],
+                     velocity=0.2, acc_time=0.25, blend_percentage=100, fine_goal=False):
+        response = self.set_positions(positions,velocity,acc_time,blend_percentage,fine_goal)
+        while not self.is_arrived():
+            rclpy.spin_once(self)
+        print("move",self.target_positions)
+    
 
 def main(args=None):
     rclpy.init(args=args)
     armCmd = ArmCmd()
-    rclpy.spin_once(armCmd)
-    armCmd.send_gripper(0.085)
+    # armCmd.send_script("Env.RunningSpeed = 100")
+    armCmd.set_positions_block([0.4,0.0,0.5,3.14,0.0,-1.57])
+    # armCmd.send_script('''
+    #                    Compliance cp1
+    #                    cp1.Frame(1)
+    #                    cp1.Multiple("X", true, 200, -200)
+    #                    cp1.Multiple("Y", true, 200, -200)
+    #                    cp1.Multiple("Z", true, 200, -200)
+    #                    int re = cp1.Start()
+    #                    ''')
+    armCmd.send_script('Compliance cp1')
+    armCmd.send_script('cp1.Reset()')
+    # armCmd.send_script('cp1.Timeout(10000)')
+    armCmd.send_script('cp1.Frame(1)')
+    # armCmd.send_script('cp1.Impedance("All", 2)')
+    armCmd.send_script('cp1.HighResistance(true)')
+    armCmd.send_script('cp1.Multiple("X", true, 200, -200)')
+    armCmd.send_script('cp1.Multiple("Y", true, 200, -200)')
+    armCmd.send_script('cp1.Multiple("Z", true, 200, -200)')
+    armCmd.send_script('cp1.Multiple("RX", true, 270, -270)')
+    armCmd.send_script('cp1.Multiple("RY", true, 270, -270)')
+    armCmd.send_script('cp1.Multiple("RZ", true, 270, -270)')
+    armCmd.send_script('cp1.Start()')
 
-    # response = armCmd.send_request()
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # response = armCmd.send_request([0.33, -0.47, 0.35, 3.14159, 0.0, -1.57])    
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # response = armCmd.send_request([0.33, -0.47, 0.19, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-    
-    # armCmd.send_gripper(0.03)
-    # time.sleep(1.5)
-    # print("pick")
-    
-    # response = armCmd.send_request([0.33, -0.46, 0.35, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # response = armCmd.send_request([0.2, -0.3, 0.35, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # response = armCmd.send_request([0.2, -0.3, 0.191, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # armCmd.send_gripper(0.085)
-    # time.sleep(1.5)
-    # print("place")
-
-    # response = armCmd.send_request([0.2, -0.3, 0.35, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # response = armCmd.send_request()
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-    # ######################################################
-
-    # response = armCmd.send_request([0.2, -0.3, 0.35, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # response = armCmd.send_request([0.2, -0.3, 0.191, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # armCmd.send_gripper(0.03)
-    # time.sleep(1.5)
-    # print("pick")
-
-    # response = armCmd.send_request([0.2, -0.3, 0.35, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # response = armCmd.send_request([0.33, -0.47, 0.35, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # response = armCmd.send_request([0.33, -0.47, 0.19, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-    
-    # armCmd.send_gripper(0.085)
-    # time.sleep(1.5)
-    # print("place")
-
-    # response = armCmd.send_request([0.33, -0.47, 0.35, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # response = armCmd.send_request()
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    #############################
-    # response = armCmd.send_request([0.0, -0.3, 0.35, 3.14159, 0.0, -1.57])
-    # while not armCmd.is_arrived():
-    #     rclpy.spin_once(armCmd)
-    # print("move",armCmd.target_positions)
-
-    # HZ = 100
-    # distance = 0.400 #(m)
-    # speed = 0.1 #(m/s)
-    # total_time = distance/speed
-
-    # duration = 1/(HZ/3)
-    # fragment_size = speed*duration
-    # p = 0
-    # print("total_time %.3f" % total_time,"fragment_size %.3f" % fragment_size ,"duration %.3f" % duration)
-    # last = time.time()
-    # while True:
-        
-    #     if p > distance:
-    #         break
-    #     rclpy.spin_once(armCmd)
-    #     if armCmd.is_arrived():
-    #         # speed += 0.02
-    #         p += fragment_size
-    #         armCmd.send_request([p, -0.3, 0.35, 3.14159, 0.0, -1.57],speed,0.001)
-    #         print("move",end=" ")
-    #         for pos in armCmd.current_positions:
-    #             print("%.3f"%pos,end=" ")
-    #         print()
-
-    #     while (time.time() - last) < (1/HZ):
-    #         rclpy.spin_once(armCmd)
-            
-    #     print(1/(time.time() - last))
-    #     last = time.time()
-    while True:
-        positions = list(map(float, input("Positions: ").split()))
-        if len(positions) == 3:
-            positions = positions + [3.14159, 0.0, -1.57]
-        if len(positions) == 1:
-            positions[0] /= 100.0
-            armCmd.send_gripper(positions[0])
-            continue
-        if len(positions) == 0:
-            armCmd.send_event()
-        response = armCmd.send_request(positions)
-        armCmd.get_logger().info("Response: %s" % response)
+    # armCmd.send_script("cp1.Frame(1)")
+    # armCmd.send_script("cp1.HighResistance(true)")
+    # #cp1.Single("Z", 40)
+    # armCmd.send_script("cp1.Single(\"Z\", 40)")
+    # # p1.Teach("Linear", "P1", "P2", 0)// 設置教導點 P1 與 P2 (將改用 Teach 模式)
+    # armCmd.send_script("cp1.Teach(\"Linear\", \"P1\", \"P2\", 0)")
+    # # cp1.Multiple("X", true, 100, -100)// 設置多軸參數 X 方向 (將改用 Multiple 模式)
+    # armCmd.send_script("cp1.Multiple(\"X\", true, 100, -100)")
+    # # cp1.Multiple("Z", true, 100, -100)// 設置多軸參數 Z 方向
+    # armCmd.send_script("cp1.Multiple(\"Z\", true, 100, -100)")
+    # # cp1.Multiple("X", true, 10, -10)// 設置多軸參數 X 方向 (將覆寫前次的 Multiple X 參數)
+    # armCmd.send_script("cp1.Multiple(\"X\", true, 10, -10)")
+    # # cp1.Impedance("All", 1)// 設置阻抗參數 (將改用 Impedance 模式)
+    # armCmd.send_script("cp1.Impedance(\"All\", 1)")
+    # # // 停止條件
+    # # cp1.Timeout(10000)// 逾時 10000ms
+    # armCmd.send_script("cp1.Timeout(10000)")
+    # # cp1.DInput("ControlBox", 0, "H")// 當 ControlBox DI0 High 時
+    # armCmd.send_script("cp1.DInput(\"ControlBox\", 0, \"H\")")
+    # # cp1.AInput("ControlBox", 0, ">=", 3.3)// 當 ControlBox AI0 >= 3.3V 時
+    # armCmd.send_script("cp1.AInput(\"ControlBox\", 0, \">=\", 3.3)")
+    # # int count = 0
+    # armCmd.send_script("int count = 0")
+    # # cp1.Condition(count > 1000)// 條件式判斷
+    # armCmd.send_script("cp1.Condition(count > 1000)")
+    # # cp1.Reset()
+    # armCmd.send_script("cp1.Reset()")
 
     rclpy.spin(armCmd)
     rclpy.shutdown()

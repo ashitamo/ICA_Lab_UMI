@@ -47,7 +47,6 @@ def generate_masks(field_img_color: np.ndarray) -> List[Dict[str, Any]]:
 
     field_rgb = cv2.cvtColor(field_img_color, cv2.COLOR_BGR2RGB)
     field_masks = mask_generator.generate(field_rgb)
-    field_img_mask_center = field_rgb.copy()
 
     # 算中心點（用來畫 ID）
     def _mask_center(mask_item):
@@ -63,39 +62,52 @@ def generate_masks(field_img_color: np.ndarray) -> List[Dict[str, Any]]:
         ys, xs = np.where(binmask > 0)
         return (float(xs.mean()), float(ys.mean())) if len(xs) else None
     
-    def _apply_colored_masks(img_bgr: np.ndarray, masks: list, alpha: float = 0.25, seed: int = 84) -> np.ndarray:
+    def _apply_colored_masks(img_bgr: np.ndarray, masks: list, alpha: float = 0.2, seed: int = 84) -> np.ndarray:
         """對圖片套用彩色遮罩。"""
-        processed = img_bgr.copy()
-        h, w = processed.shape[:2]
+        h, w = img_bgr.shape[:2]
         rng = np.random.default_rng(seed)
         
-        for item in masks:
+        for idx, item in enumerate(masks):
             m = item["segmentation"].astype(np.uint8)
             if m.ndim == 3:
                 m = m[..., 0]
             if m.sum() == 0:
                 continue
             
-            color = rng.integers(0, 255, size=3, dtype=np.uint8)
+            color = rng.integers(25, 255, size=3, dtype=np.uint8)
             color_mask = np.zeros((h, w, 3), dtype=np.uint8)
             color_mask[m > 0] = color
-            processed = cv2.addWeighted(processed, 1.0, color_mask, alpha, 0)
-        return processed
+            img_bgr = cv2.addWeighted(img_bgr, 1.0, color_mask, alpha, 0)
+            cxcy = _mask_center(item)
+            if cxcy is None:
+                continue
+            cx, cy = cxcy
+            color = color.tolist()
+            cv2.circle(img_bgr, (int(cx), int(cy)), 4, (0, 0, 0), -1)
+            cv2.circle(img_bgr, (int(cx), int(cy)), 3, (color[0], color[1], color[2]), -1)
+            cv2.putText(img_bgr, str(idx), (int(cx) + 6, int(cy) - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(img_bgr, str(idx), (int(cx) + 6, int(cy) - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (color[0], color[1], color[2]), 1, cv2.LINE_AA)
 
-    # 畫所有中心 + ID（ID = field_masks 的 idx）
-    for idx, item in enumerate(field_masks):
-        cxcy = _mask_center(item)
-        if cxcy is None:
-            continue
-        cx, cy = cxcy
-        cv2.circle(field_img_mask_center, (int(cx), int(cy)), 4, (0, 0, 0), -1)
-        cv2.circle(field_img_mask_center, (int(cx), int(cy)), 3, (255, 255, 255), -1)
-        cv2.putText(field_img_mask_center, str(idx), (int(cx) + 6, int(cy) - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(field_img_mask_center, str(idx), (int(cx) + 6, int(cy) - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
-    field_img_colored_mask = _apply_colored_masks(field_img_mask_center.copy(), field_masks)
-    field_img_mask_center = field_img_mask_center.copy()
+        return img_bgr
+    
+    def _apply_center_text_masks(img_bgr: np.ndarray, masks: list) -> np.ndarray:
+        for idx, item in enumerate(masks):
+            cxcy = _mask_center(item)
+            if cxcy is None:
+                continue
+            cx, cy = cxcy
+            cv2.circle(img_bgr, (int(cx), int(cy)), 4, (0, 0, 0), -1)
+            cv2.circle(img_bgr, (int(cx), int(cy)), 3, (255, 255, 255), -1)
+            cv2.putText(img_bgr, str(idx), (int(cx) + 6, int(cy) - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(img_bgr, str(idx), (int(cx) + 6, int(cy) - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        return img_bgr
+    
+    field_img_mask_center = _apply_center_text_masks(field_rgb.copy(), field_masks)
+    field_img_colored_mask = _apply_colored_masks(field_rgb.copy(), field_masks)
 
     return field_img_mask_center, field_img_colored_mask, field_masks
 
@@ -195,6 +207,7 @@ def get_platform_mask(
         if m.ndim == 3:
             m = m[..., 0]
         target_mask = (m > 0).astype(np.uint8) * 255
+        print("[Debug] target_id =", target_id)
     else:
         if target_id is not None:
             print(f"[Warn] target_id={target_id} out of range (0~{len(field_masks)-1})")
