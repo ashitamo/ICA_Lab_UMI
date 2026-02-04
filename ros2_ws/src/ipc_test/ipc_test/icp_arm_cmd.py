@@ -510,22 +510,22 @@ def main(args=None):
         #     window_name="Shift + Left Click to pick points"
         # )  
         mask = None
-        for i in range(10):
+        for i in range(5):
+            print("[Debug] try", i)
             data = iCPNode.get_data()
             intr = iCPNode.get_cam_info()
             color_img, depth_img, point_cloud, tcp_pose = data
             point_cloud = pc2_to_open3d(point_cloud)
             point_cloud = filter_pcd_by_depth_percentile(point_cloud,keep_percentile=95)
-            
-            if i == 0 or mask is None:
-                field_img_mask_center, field_img_colored_mask, field_masks = generate_masks(color_img)
-                mask,_ = get_cylinder_mask(
-                        [],
-                        field_img_mask_center,
-                        field_masks
-                    )
-                if mask is None:
-                    continue
+
+            field_img_mask_center, field_img_colored_mask, field_masks = generate_masks(color_img)
+            mask,_ = get_cylinder_mask(
+                    [],
+                    field_img_mask_center,
+                    field_masks
+                )
+            if mask is None:
+                continue
             src = masked_pointcloud_from_o3d(point_cloud,mask,intr)
             tgt = mesh_to_pcd("/home/lab606/ICA_Lab_UMI/ros2_ws/src/ipc_test/peg_30.5mm - Part 1.stl")
             T, bbox, result_icp = get_bbox_by_icp(src, tgt, viz=False, all_pcd=point_cloud)
@@ -589,7 +589,7 @@ def main(args=None):
     approach_grasp()
     # insert
     #   move to insert position
-    horizon_pos = rotCam([0.42, -0.05, 0.45, 3.14, 0.0, -1.57],[180,0,-90])
+    horizon_pos = rotCam([0.42, -0.1, 0.45, 3.14, 0.0, -1.57],[180,0,-70])
     # horizon_pos = rotCam([0.4, 0.2, 0.35, 3.14, 0.0, -1.57],[180,-45,-90])
     armCmd.set_positions_block(horizon_pos.tolist())
     time.sleep(1.0)
@@ -659,7 +659,7 @@ def main(args=None):
     four_hole_points = np.asarray(four_hole_points.points)
     four_hole_points = order_4_holes_world_xy(four_hole_points)
     print("four_hole_points",four_hole_points)
-    selected_hole = four_hole_points[2] # four_hole_points[int(input("select hole 0~3:"))]
+    selected_hole = four_hole_points[0] # four_hole_points[int(input("select hole 0~3:"))]
     print("selected_hole",selected_hole)
 
     T_W_G0 = np.eye(4)

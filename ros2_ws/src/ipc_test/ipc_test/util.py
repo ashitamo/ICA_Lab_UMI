@@ -5,7 +5,7 @@ import base64, json, os
 from openai import OpenAI
 import re 
 import open3d as o3d
-
+from sam2_client import SAM2AutomaticMaskGenerator
 
 def _img_bgr_to_png_bytes(img_bgr: np.ndarray) -> bytes:
     """把 BGR 圖存成 PNG bytes。"""
@@ -34,7 +34,7 @@ def generate_masks(field_img_color: np.ndarray) -> List[Dict[str, Any]]:
     STABILITY_SCORE_THRESH = 0.92
     MIN_MASK_REGION_AREA   = 100.0
 
-    from sam2_client_1141115v2 import SAM2AutomaticMaskGenerator
+    
     print(f"[Info] SAM2 device: {'ICALAB_AI5'}")
 
     mask_generator = SAM2AutomaticMaskGenerator(
