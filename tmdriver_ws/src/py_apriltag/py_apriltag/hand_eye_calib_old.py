@@ -2,29 +2,24 @@ import math
 from apriltag_grid_pose import AprilGridPoseEstimator
 from nav_msgs.msg import Path
 from geometry_msgs.msg import TransformStamped,PoseStamped
-from sensor_msgs.msg import Image,CameraInfo
+from sensor_msgs.msg import Image
 from py_gripper_interfaces.srv import Trajectory
 from tm_msgs.srv import SetPositions,SetEvent
 from tm_msgs.msg import FeedbackState
 from robotiq_85_msgs.msg import GripperCmd
-from realsense2_camera_msgs.msg import Extrinsics
-from rclpy.qos import QoSProfile, DurabilityPolicy
 
 import cv_bridge
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from tf2_ros import TransformBroadcaster
 from dt_apriltags import Detector
 import os
 import cv2
+from scipy.spatial.transform import Rotation as R
 import time
 import queue
 import yaml
-
-import math
-import numpy as np
-from typing import List, Tuple
-from scipy.spatial.transform import Rotation as R
 
 T_a_A =  np.array([[ 0, 1, 0, 0],
                   [ 1, 0, 0 ,0],
@@ -33,7 +28,7 @@ T_a_A =  np.array([[ 0, 1, 0, 0],
 T_A_a = np.linalg.inv(T_a_A)
 
 T_G_E = np.array(
-    [[ 1, 0, 0, 0],
+    [[1, 0, 0, 0],
     [ 0, 1, 0, 0],
     [ 0, 0, 1, 0.164],
     [ 0, 0, 0, 1]]
@@ -65,72 +60,30 @@ class HandEyeCalib(Node):
         # self.april_tag_size = 0.05012
         # self.april_tag_size = 0.1325
 
-        self.cam_info_sub = self.create_subscription(
-            CameraInfo,
-            '/camera/color/camera_info',
-            self.cam_info_callback,
-            10
-        )
-        qos_profile = QoSProfile(
-            depth=10,
-            # 關鍵：設定為 TRANSIENT_LOCAL 才能讀取過去發佈過的資料
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
-        )
-        self.depth_to_color_sub = self.create_subscription(
-            Extrinsics,
-            "/camera/extrinsics/depth_to_color",
-            self.depth_to_color_callback,
-            qos_profile
-        )
-        # Initialize the transform broadcaster
+        self.new_mtx, self.roi = cv2.getOptimalNewCameraMatrix(CAM_MTX, DIST_COEFFS, (848,480), 1, (848,480))
 
+        # Initialize the transform broadcaster
         self.tf_broadcaster = TransformBroadcaster(self)
         self.cv_bridge = cv_bridge.CvBridge()
-        self.at_detector = Detector(
-            searchpath=['apriltags'],
-            families='tag36h11',
-            nthreads=1,
-            quad_decimate=1.0,
-            quad_sigma=0.0,
-            refine_edges=1,
-            decode_sharpening=0.25,
-            debug=0
-        )
+        self.at_detector = Detector(searchpath=['apriltags'],
+                       families='tag36h11',
+                       nthreads=1,
+                       quad_decimate=1.0,
+                       quad_sigma=0.0,
+                       refine_edges=1,
+                       decode_sharpening=0.25,
+                       debug=0)
 
-        self.queue = queue.Queue(maxsize=1)
+        self.queue = queue.Queue(maxsize=2)
         self._sub = self.create_subscription(
             Image,
             '/camera/color/image_rect_raw',
             self.readCam,
             10
         )
-        
+
         self.T_W_G_list = []
         self.T_C_A_list = []
-    def depth_to_color_callback(self, msg): 
-        # depth optical frame is same as infra1
-        self.get_logger().info('depth_to_color')
-        self.T_D_C = np.eye(4)
-        rot = np.asarray(msg.rotation).reshape(3,3)
-        trans = np.asarray(msg.translation).reshape(3)
-        self.T_D_C[:3,:3] = rot
-        self.T_D_C[:3,3] = trans
-        self.destroy_subscription(self.depth_to_color_sub)
-
-    def cam_info_callback(self, msg):
-        self.get_logger().info('cam_info timestamp: %.6f' % msg.header.stamp.sec + '%.6f' % (msg.header.stamp.nanosec*1e-9))
-        self.info = {}
-        self.info['width'] = msg.width
-        self.info['height'] = msg.height
-        self.info['fx'] = msg.k[0]
-        self.info['fy'] = msg.k[4]
-        self.info['ppx'] = msg.k[2]
-        self.info['ppy'] = msg.k[5]
-        self.info['distortion_model'] = msg.distortion_model
-        self.info['coeffs'] = msg.d
-        self.destroy_subscription(self.cam_info_sub)
-
-
     def pos_callback(self,msg):
         self.current_positions = msg.tool_pose
         # self.get_logger().info("Current Position: %s" % self.current_positions)
@@ -185,14 +138,22 @@ class HandEyeCalib(Node):
             self.queue.get()
         self.queue.put(frame)
 
+    def detectGrid(self):
+        frame = self.queue.queue[-1]
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+        
+        estimator = AprilGridPoseEstimator(self.tag_size,self.spacing_ratio,CAM_MTX,DIST_COEFFS)
+        results,frame = estimator.estimate_pose(frame,visualize=True)
+        return results,frame
+
 
     def detectTag(self):
         frame = self.queue.queue[-1]
-        # frame = cv2.undistort(frame, CAM_MTX, DIST_COEFFS, None, self.new_mtx)
-        # x, y, w, h = self.roi
-        # frame = frame[y:y+h, x:x+w]
+        frame = cv2.undistort(frame, CAM_MTX, DIST_COEFFS, None, self.new_mtx)
+        x, y, w, h = self.roi
+        frame = frame[y:y+h, x:x+w]
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-        newcamera_params = [self.info['fx'],self.info['fy'],self.info['ppx'],self.info['ppy']]
+        newcamera_params = [self.new_mtx[0,0], self.new_mtx[1,1], self.new_mtx[0,2], self.new_mtx[1,2]]
         print(newcamera_params)
         results = self.at_detector.detect(frame,True,newcamera_params,self.april_tag_size)
 
@@ -213,13 +174,89 @@ class HandEyeCalib(Node):
             cv2.line(frame,(int(results[0].corners[3][0]),int(results[0].corners[3][1])),
                             (int(results[0].corners[0][0]),int(results[0].corners[0][1])),(255,0,0),2)
             r = results[0]
-            T_D_A = np.eye(4)
-            T_D_A[:3,:3] = r.pose_R
-            T_D_A[:3,3] = r.pose_t.reshape(3)
-            # T_C_A = np.linalg.inv(self.T_D_C) @ T_D_A
-            return T_D_A,frame
+            T_C_A = np.eye(4)
+            T_C_A[:3,:3] = r.pose_R
+            T_C_A[:3,3] = r.pose_t.reshape(3)
+            return T_C_A,frame
         return None,frame
     
+    
+    def detectBoard(self):
+        """
+        回傳：
+            - T_C_B: 4x4 齊次矩陣（棋盤 B 在相機 C 座標系下的位姿）
+            - frame: 標註後影像（便於除錯）
+        若偵測失敗，回傳 (None, frame)
+        """
+
+        def make_chessboard_object_points(cols: int, rows: int, square_size: float, center_origin: bool = True):
+            """
+            產生棋盤 3D 角點（Z=0）：
+            - 若 center_origin=True，則以棋盤幾何中心為原點（手眼時較直觀）
+            - 若 False，則以 (0,0) 角點為原點（OpenCV 標準慣例）
+            """
+            objp = np.zeros((rows * cols, 3), dtype=np.float32)
+            # 先以左上角為原點排點（OpenCV 慣例）
+            grid = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2)
+            objp[:, :2] = grid * square_size
+
+            if center_origin:
+                # 平移到幾何中心為 (0,0)
+                center = np.array([(cols - 1) * square_size / 2.0,
+                                (rows - 1) * square_size / 2.0], dtype=np.float32)
+                objp[:, 0:2] -= center
+            return objp
+
+        frame = self.queue.get()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+
+        pattern_size = (CHESSBOARD_COLS, CHESSBOARD_ROWS)  # (cols, rows)
+        flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_FAST_CHECK | cv2.CALIB_CB_NORMALIZE_IMAGE
+        found, corners = cv2.findChessboardCorners(gray, pattern_size, flags=flags)
+
+        if not found:
+            return None, frame
+
+        # 角點亞像素化
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+        corners_refined = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+
+        # 建立棋盤在自身座標的 3D 點
+        object_points = make_chessboard_object_points(CHESSBOARD_COLS, CHESSBOARD_ROWS, SQUARE_SIZE, center_origin=True)
+
+        # PnP 解姿態（棋盤相對相機）
+        ok, rvec, tvec = cv2.solvePnP(object_points, corners_refined, CAM_MTX, DIST_COEFFS, flags=cv2.SOLVEPNP_ITERATIVE)
+        if not ok:
+            return None, frame
+
+        # 轉齊次矩陣
+        R_cb, _ = cv2.Rodrigues(rvec)  # 3x3
+        T_C_B = np.eye(4, dtype=np.float64)
+        T_C_B[:3, :3] = R_cb
+        T_C_B[:3,  3] = tvec.reshape(3)
+
+        # 視覺化（畫出角點與座標軸）
+        cv2.drawChessboardCorners(frame, pattern_size, corners_refined, found)
+
+        # 畫一個簡單的 3D 軸（長度 = 3*square_size）
+        axis_len = 3 * SQUARE_SIZE
+        axis = np.float32([[0, 0, 0],
+                        [axis_len, 0, 0],
+                        [0, axis_len, 0],
+                        [0, 0, axis_len]]).reshape(-1, 3)
+        imgpts, _ = cv2.projectPoints(axis, rvec, tvec, CAM_MTX, DIST_COEFFS)
+        imgpts = imgpts.astype(int)
+
+        # 畫線：原點->X(藍)、原點->Y(綠)、原點->Z(紅)
+        o = tuple(imgpts[0].ravel())
+        cv2.line(frame, o, tuple(imgpts[1].ravel()), (255, 0, 0), 2)
+        cv2.line(frame, o, tuple(imgpts[2].ravel()), (0, 255, 0), 2)
+        cv2.line(frame, o, tuple(imgpts[3].ravel()), (0, 0, 255), 2)
+
+        return T_C_B, frame
+
+
+
     def pub_tf(self,T,parent_frame,child_frame):
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
@@ -241,6 +278,11 @@ class HandEyeCalib(Node):
         R_C_A = [T[:3,:3] for T in self.T_C_A_list]
         t_C_A = [T[:3,3] for T in self.T_C_A_list]
         return cv2.calibrateHandEye(R_W_G, t_W_G, R_C_A, t_C_A, None, cv2.CALIB_HAND_EYE_TSAI)
+
+import math
+import numpy as np
+from typing import List, Tuple
+from scipy.spatial.transform import Rotation as R
 
 def generate_square_poses_faceZ_fixed_yaw(
     center_xy: Tuple[float, float] = (-0.15, -0.50),  # 正方形中心 (cx, cy)
@@ -327,6 +369,19 @@ CHESSBOARD_COLS = 10
 CHESSBOARD_ROWS = 6
 SQUARE_SIZE = 0.0254  # 每個小方格邊長（公尺）
 
+camera_params = [434.5713806152344, 433.9692077636719, 422.2452392578125, 241.36700439453125]
+# # OpenCV 預設 k1,k2,p1,p2,k3(,k4,k5,k6)；若你有Realsense標定檔可以填進來
+DIST_COEFFS = np.array(
+    [-0.054195329546928406, 0.06144030764698982, 8.257640001829714e-05, 0.0007601580582559109,-0.02074556238949299],
+    dtype=np.float64
+)
+
+# 相機內參（fx, fy, cx, cy）與畸變係數（若未知可先全0）
+fx, fy, cx, cy = camera_params
+CAM_MTX = np.array([[fx, 0, cx],
+                    [0, fy, cy],
+                    [0,  0,  1]], dtype=np.float64)
+
 def main():
     ## hand-eye calibration positions
     pos = [[0.55, -0.03, 0.3, 3.14159, 0.0, 3.14159]]
@@ -335,7 +390,7 @@ def main():
     last_angle = (90)*math.pi/180.0
     import random
     for i,z in enumerate(z_list):
-        yaw = first_angle + i*(last_angle-first_angle)/len(z_list)
+        yaw = first_angle + i*(first_angle-last_angle)/len(z_list)
         temp = generate_square_poses_faceZ_fixed_yaw(
             center_xy = (pos[0][0], pos[0][1]),  # 正方形中心 (cx, cy)
             side = 0.25,
@@ -345,7 +400,7 @@ def main():
             order = "snake"
         )
         pos.extend(temp)
-    # print(pos)
+    print(pos)
     rclpy.init()
     handEyeCalib = HandEyeCalib()
     handEyeCalib.april_tag_size = 0.132
@@ -442,10 +497,10 @@ def main():
 
 def getTagPos():
     # mean april tag
-    pos = [[0.28, -0.33, 0.20, 3.14159, 0.0, -1.5708]]
+    pos = [[0.28, -0.33, 0.20, 3.14159, 0.0, -3.14]]
     z_list = [0.20+i*0.04 for i in range(3)]
-    first_angle = (180-40)*math.pi/180.0
-    last_angle = (180+40)*math.pi/180.0
+    first_angle = (-180-40)*math.pi/180.0
+    last_angle = (-180+40)*math.pi/180.0
     import random
     for i,z in enumerate(z_list):
         yaw = first_angle + i*(last_angle-first_angle)/len(z_list)

@@ -102,7 +102,7 @@ class ICPNode(Node):
         )
 
         self.color_img_sub = Subscriber(self, Image, '/camera/color/image_rect_raw')
-        self.depth_img_sub = Subscriber(self, Image, '/camera/aligned_depth_to_color/image_raw')
+        self.depth_img_sub = Subscriber(self, Image, '/camera/depth/image_rect_raw')
         self.points_sub = Subscriber(self, PointCloud2, '/camera/depth/color/points')
         self.feedback_sub = Subscriber(self, FeedbackState, '/feedback_states')
         

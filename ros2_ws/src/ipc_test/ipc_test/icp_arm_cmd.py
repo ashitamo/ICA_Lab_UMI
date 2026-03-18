@@ -36,7 +36,7 @@ class ArmCmd(Node):
             self.get_logger().info('service not available, waiting again...')
         self.set_positions_req = SetPositions.Request()
         self.set_event_req = SetEvent.Request()
-        self.target_positions = [0.5, -0.1, 0.44, 3.14, 0.0, -1.57]
+        self.target_positions = [0.5, -0.1, 0.44, 3.14, 0.0, -3.14]
         self.current_positions = self.target_positions.copy()
         
     def pos_callback(self,msg):
@@ -48,7 +48,7 @@ class ArmCmd(Node):
             return False
         return True
 
-    def set_positions(self,positions=[0.2, -0.4, 0.35, 3.14159, 0.0, -1.57],
+    def set_positions(self,positions=[0.2, -0.4, 0.35, 3.14159, 0.0, -3.14],
                      velocity=0.2, acc_time=0.25, blend_percentage=100, fine_goal=False):
         
         self.target_positions = positions
@@ -64,7 +64,7 @@ class ArmCmd(Node):
         # rclpy.spin_until_future_complete(self, future)
         return future.result()
     
-    def set_positions_block(self,positions=[0.2, -0.4, 0.35, 3.14159, 0.0, -1.57],
+    def set_positions_block(self,positions=[0.2, -0.4, 0.35, 3.14159, 0.0, -3.14],
                      velocity=0.2, acc_time=0.25, blend_percentage=100, fine_goal=False):
         response = self.set_positions(positions,velocity,acc_time,blend_percentage,fine_goal)
         while not self.is_arrived():
@@ -423,11 +423,11 @@ def main(args=None):
         time.sleep(0.5)
         armCmd.send_gripper(0.085)
         time.sleep(0.5)
-        armCmd.set_positions_block([0.5, -0.1, 0.44, 3.14, 0.0, -1.57])
+        armCmd.set_positions_block([0.5, -0.1, 0.44, 3.14, 0.0, -3.14])
 
         # approach 
         #   move to top position
-        armCmd.set_positions_block([0.55, -0.3, 0.44, 3.14, 0.0, -1.57])
+        armCmd.set_positions_block([0.55, -0.3, 0.44, 3.14, 0.0, -3.14])
 
         # grasp
         #   ICP
@@ -469,7 +469,7 @@ def main(args=None):
 
 
 
-        mid_pos = [0.57, -0.29, 0.3, 3.14, 0.0, -1.57]
+        mid_pos = [0.57, -0.29, 0.3, 3.14, 0.0, -3.14]
         armCmd.set_positions_block(mid_pos)
         time.sleep(2.0)
         # positions = []
@@ -552,6 +552,7 @@ def main(args=None):
             T_W_E1 = T_W_o0.copy()
             rot = R.from_matrix(T_W_E1[:3,:3]).as_euler("xyz", degrees=True)
             rot[0], rot[1] = 180.0, 0.0
+            rot[2] = -180
             T_W_E1[:3,:3] = R.from_euler("xyz", rot, degrees=True).as_matrix()
 
             T_W_G1 = T_W_E1 @ T_E_G
@@ -575,7 +576,7 @@ def main(args=None):
 
         rot = R.from_matrix(temp[:3,:3]).as_euler('xyz',degrees=False)
         grasp_pos = [temp[0,3], temp[1,3], temp[2,3],rot[0],rot[1],rot[2]]
-        grasp_pos[2] = grasp_pos[2] - 0.02
+        grasp_pos[2] = grasp_pos[2] - 0.01
         print(grasp_pos)
         #   move to grasp position
         armCmd.set_positions_block(grasp_pos)
@@ -584,13 +585,13 @@ def main(args=None):
 
         # move
         #   move to top position
-        armCmd.set_positions_block([0.55, -0.3, 0.4, 3.14, 0.0, -1.57])
+        armCmd.set_positions_block([0.55, -0.3, 0.4, 3.14, 0.0, -3.14])
     
     approach_grasp()
     # insert
     #   move to insert position
-    horizon_pos = rotCam([0.42, -0.1, 0.45, 3.14, 0.0, -1.57],[180,0,-70])
-    # horizon_pos = rotCam([0.4, 0.2, 0.35, 3.14, 0.0, -1.57],[180,-45,-90])
+    horizon_pos = rotCam([0.42, -0.1, 0.45, 3.14, 0.0, -3.14],[180,0,-70])
+    # horizon_pos = rotCam([0.4, 0.2, 0.35, 3.14, 0.0, -3.14],[180,-45,-90])
     armCmd.set_positions_block(horizon_pos.tolist())
     time.sleep(1.0)
     mask = None
@@ -663,7 +664,7 @@ def main(args=None):
     print("selected_hole",selected_hole)
 
     T_W_G0 = np.eye(4)
-    T_W_G0[:3,:3] = R.from_euler('xyz',[180.0,0.0,-90.0], degrees=True).as_matrix()
+    T_W_G0[:3,:3] = R.from_euler('xyz',[180.0,0.0,-180.0], degrees=True).as_matrix()
     T_W_G0[:3,3] = np.array([0.46, -0.04, 0.38]) # virtual position
     T_W_P0 = T_W_G0 @ T_G_C @ T_C_P
     print("T_W_P0",T_W_P0)
@@ -699,7 +700,7 @@ def main(args=None):
         T_P_C, T_C_G,
         r=0.09,
         th1=15.0,
-        touch_offset=-0.000,     # touch點距離洞口多遠（沿軸線
+        touch_offset=-0.001,     # touch點距離洞口多遠（沿軸線
         insert_forward=0.001,     # 插入時往前推多遠
         upright_depth=-0.02,      # 轉正時是否再往下一點 （z方向
     ):
@@ -746,7 +747,7 @@ def main(args=None):
 
         v_xyz = _unit(np.array([x1-x2, y1-y2, z1-z2]))
         zP = - v_xyz.copy()
-        R_W_G = R.from_euler('xyz', [np.pi, 0.0, -np.pi/2], degrees=False).as_matrix()
+        R_W_G = R.from_euler('xyz', [np.pi, 0.0, np.pi], degrees=False).as_matrix()
         xG=R_W_G[:3,0]; yG=R_W_G[:3,1]; zG = R_W_G[:3,2]
         xP = _unit(np.cross(zG, zP))
         # let xP and xG same sign
@@ -758,10 +759,10 @@ def main(args=None):
         R_P_G = T_P_G[:3,:3]
         R_W_G1 = R_W_P @ R_P_G
         zG1 = R_W_G1[:,2]
-        xG1 = _unit(np.cross(zG, zG1))
-        if np.dot(xG1, xG) < 0:
-            xG1 = -xG1
-        yG1 = np.cross(zG1, xG1)
+        yG1 = _unit(np.cross(zG, zG1))
+        if np.dot(yG1, yG) < 0:
+            yG1 = -yG1
+        xG1 = np.cross(yG1, zG1)
         R_W_G1 = np.stack([xG1, yG1, zG1], axis=1)  # columns = x,y,z
         R_W_P1 = R_W_G1 @ R_P_G.T
         T_W_P_approach = _make_T(R_W_P1, np.array([x1, y1, z1]))
